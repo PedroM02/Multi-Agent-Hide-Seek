@@ -11,6 +11,61 @@ from observation_definition import build_observation
 from reward_attribution import attribute_rewards
 
 
+def generate_walls(
+    width: int,
+    height: int,
+    num_walls: int,
+    wall_size: int,
+    rng: random.Random,
+    existing_walls: Optional[Sequence[Tuple[int, int]]] = None,
+) -> List[Tuple[int, int]]:
+    """Generate `num_walls` straight wall segments (horizontal or vertical),
+    each with `wall_size` cells. Walls are placed randomly but never fill
+    an entire row/column (to keep the map passable). Already-occupied cells
+    (from `existing_walls`) are skipped.
+
+    Returns the combined list of wall cell coordinates.
+    """
+    occupied: set[Tuple[int, int]] = set(existing_walls) if existing_walls else set()
+    result: List[Tuple[int, int]] = list(occupied)
+
+    for _ in range(num_walls):
+        # Try up to 50 random placements before giving up on this wall.
+        for _attempt in range(50):
+            horizontal = rng.choice([True, False])
+            if horizontal:
+                max_x = width - wall_size
+                if max_x < 0:
+                    continue
+                ox = rng.randint(0, max_x)
+                oy = rng.randint(0, height - 1)
+                cells = [(ox + i, oy) for i in range(wall_size)]
+                # Don't block the full row
+                if len(cells) >= width:
+                    continue
+            else:
+                max_y = height - wall_size
+                if max_y < 0:
+                    continue
+                ox = rng.randint(0, width - 1)
+                oy = rng.randint(0, max_y)
+                cells = [(ox, oy + i) for i in range(wall_size)]
+                # Don't block the full column
+                if len(cells) >= height:
+                    continue
+
+            # Skip if any cell already occupied
+            if any(c in occupied for c in cells):
+                continue
+
+            for c in cells:
+                occupied.add(c)
+            result.extend(cells)
+            break
+
+    return result
+
+
 class SimulationConfig:
     def __init__(self) -> None:
         self.width = 10
@@ -21,6 +76,8 @@ class SimulationConfig:
         self.num_prey = 1
         self.seed = 0
         self.walls: Optional[Sequence[Tuple[int, int]]] = None
+        self.num_walls: int = 0
+        self.wall_size: int = 3
 
 
 def copy_config(base: SimulationConfig, **overrides) -> SimulationConfig:
@@ -33,6 +90,8 @@ def copy_config(base: SimulationConfig, **overrides) -> SimulationConfig:
     c.num_prey = base.num_prey
     c.seed = base.seed
     c.walls = base.walls
+    c.num_walls = base.num_walls
+    c.wall_size = base.wall_size
     for k, v in overrides.items():
         setattr(c, k, v)
     return c
@@ -56,7 +115,20 @@ class SimulationState:
     def __init__(self, config: SimulationConfig, rng: random.Random) -> None:
         self.config = config
         self.rng = rng
-        self.env = Environment(config.width, config.height, config.walls)
+
+        # Resolve wall cells: manual --obstacles + auto-generated walls.
+        walls = config.walls
+        if config.num_walls > 0:
+            walls = generate_walls(
+                config.width,
+                config.height,
+                config.num_walls,
+                config.wall_size,
+                rng,
+                existing_walls=walls,
+            )
+
+        self.env = Environment(config.width, config.height, walls)
         self.agents: List[Agent] = []
         self.step_index = 0
         self.outcome = gt.OUTCOME_ONGOING

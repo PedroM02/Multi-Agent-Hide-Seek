@@ -44,6 +44,20 @@ def main() -> None:
     parser.add_argument("--prey", type=int, default=1)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument(
+        "--num-walls",
+        type=int,
+        default=2,
+        dest="num_walls",
+        help="Number of wall segments to generate randomly.",
+    )
+    parser.add_argument(
+        "--wall-size",
+        type=int,
+        default=2,
+        dest="wall_size",
+        help="Length (in cells) of each randomly generated wall segment.",
+    )
+    parser.add_argument(
         "--obstacles",
         type=str,
         default=None,
@@ -59,6 +73,8 @@ def main() -> None:
     config.num_predators = args.predators
     config.num_prey = args.prey
     config.seed = args.seed
+    config.num_walls = args.num_walls
+    config.wall_size = args.wall_size
     config.walls = _parse_walls(args.obstacles)
 
     if args.gui:

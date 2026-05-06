@@ -34,19 +34,26 @@ class Agent:
         )
         if vis is not None:
             self.last_seen_enemy = vis
-        return self.decision.choose_action(obs, self.last_seen_enemy)
+        action, clear_memory = self.decision.choose_action(obs, self.last_seen_enemy)
+        if clear_memory:
+            self.last_seen_enemy = None
+        return action
 
 
 def build_agents_for_env(env, rng: random.Random) -> list[Agent]:
     shared_perception = Perception()
     agents: list[Agent] = []
     for body in sorted(env.bodies.values(), key=lambda b: b.agent_id):
+        # Each agent gets its own RNG seeded from the parent — avoids
+        # coupled "random" choices where both agents draw from the same
+        # generator state in the same step.
+        agent_seed = rng.randint(0, 2**31)
         agents.append(
             Agent(
                 agent_id=body.agent_id,
                 team=body.team,
                 perception=shared_perception,
-                decision=DecisionMaking(rng),
+                decision=DecisionMaking(random.Random(agent_seed)),
             )
         )
     return agents

@@ -23,10 +23,16 @@ class DecisionMaking:
         self,
         obs: dict,
         last_seen_enemy: tuple[int, int] | None,
-    ) -> str:
+    ) -> tuple[str, bool]:
+        """Returns (chosen_action, should_clear_memory).
+
+        should_clear_memory is True when the agent reached the last-seen
+        position without finding the enemy there — so the caller can drop
+        the stale memory instead of looping forever.
+        """
         legal = list(obs["legal_actions"])
         if not legal:
-            return gt.STAY
+            return gt.STAY, False
 
         visible = obs["visible_enemies"]
         if visible:
@@ -36,24 +42,32 @@ class DecisionMaking:
                 obs["team"],
                 visible,
             )
+            stale = False
         elif last_seen_enemy is not None:
             target = last_seen_enemy
+            stale = True
         else:
-            return self._rng.choice(legal)
+            return self._rng.choice(legal), False
 
         tx, ty = target
         ego_x, ego_y = obs["ego_x"], obs["ego_y"]
 
+        # If we've arrived at the last-seen position and the enemy isn't
+        # here, clear memory so we fall back to exploration.
+        if stale and ego_x == tx and ego_y == ty:
+            return self._rng.choice(legal), True
+
         if obs["team"] == gt.TEAM_PREDATOR:
 
-            def score(act: str) -> tuple[int, str]:
+            def score(act: str) -> tuple[int, int]:
                 nx, ny = _apply_action(ego_x, ego_y, act)
-                return (_manhattan(nx, ny, tx, ty), act)
+                # Random tiebreaker prevents deterministic corner loops.
+                return (_manhattan(nx, ny, tx, ty), self._rng.randint(0, 1000))
 
-            return min(legal, key=score)
+            return min(legal, key=score), False
 
-        def score_prey(act: str) -> tuple[int, str]:
+        def score_prey(act: str) -> tuple[int, int]:
             nx, ny = _apply_action(ego_x, ego_y, act)
-            return (-_manhattan(nx, ny, tx, ty), act)
+            return (-_manhattan(nx, ny, tx, ty), self._rng.randint(0, 1000))
 
-        return min(legal, key=score_prey)
+        return min(legal, key=score_prey), False
