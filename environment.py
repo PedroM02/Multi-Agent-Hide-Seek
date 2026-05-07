@@ -13,6 +13,12 @@ class AgentBody:
         self.y = y
         self.alive = alive
 
+class Obstacle:
+    def __init__(self, obstacle_id, x, y):
+        self.obstacle_id = obstacle_id
+        self.x = x
+        self.y = y
+        self.held_by: int | None = None
 
 class Environment:
     """Playable rectangle [0, width) x [0, height); optional obstacle cells. Out-of-bounds moves are blocked elsewhere."""
@@ -33,6 +39,7 @@ class Environment:
                 if self._in_bounds(wx, wy):
                     self.wall_cells.add((wx, wy))
         self.bodies: dict[int, AgentBody] = {}
+        self.obstacles: dict[int, Obstacle] = {}
 
     def _in_bounds(self, x: int, y: int) -> bool:
         return 0 <= x < self.width and 0 <= y < self.height
@@ -88,6 +95,36 @@ class Environment:
             bodies.append(b)
             aid += 1
         return bodies
+    
+    def place_obstacle_random(self, n: int, rng) -> None:
+        self.obstacles.clear()
+        occupied = {(b.x, b.y) for b in self.bodies.values()}
+        free = [c for c in self.free_cells() if c not in occupied]
+        rng.shuffle(free)
+        for i, (x, y) in enumerate(free[:n]):
+            self.obstacles[i] = Obstacle(obstacle_id=i, x=x, y=y)
+
+            
+    def pickup_obstacle(self, agent_id: int) -> None:
+        body = self.bodies[agent_id]
+        already_holding = any(it.held_by == agent_id for it in self.obstacles.values())
+        if already_holding:
+            return
+        for obstacle in self.obstacles.values():
+            if obstacle.held_by is None:
+                continue
+            if abs(obstacle.x - body.x) <= 1 and abs(obstacle.y - body.y) <= 1 and (obstacle.x != body.x or obstacle.y != body.y):
+                obstacle.held_by = agent_id
+                return
+    
+    def drop_obstacle(self, agent_id: int) -> None:
+        body = self.bodies[agent_id]
+        for obstacle in self.obstacles.values():
+            if obstacle.held_by == agent_id:
+                self.obstacle.held_by = None
+                obstacle.x = body.x
+                obstacle.y = body.y
+                return
 
     def alive_bodies(self) -> Iterator[AgentBody]:
         for b in self.bodies.values():
@@ -107,6 +144,16 @@ class Environment:
                     out.append(gt.STAY)
                 continue
             out.append(act)
+        # pickup if an unclaimed obstacle is here
+        if any(
+            it.held_by is None 
+            and abs(it.x - body.x) <= 1 and (it.y - body.y) <= 1
+            and (it.x != body.x or it.y != body.y)
+            for it in self.obstacles.values()):
+            out.append(gt.PICKUP)
+        # drop if holding something
+        if any(it.held_by == body.agent_id for it in self.obstacles.values()):
+            out.append(gt.DROP)     
         return tuple(out)
 
     def set_position(self, agent_id: int, x: int, y: int) -> None:

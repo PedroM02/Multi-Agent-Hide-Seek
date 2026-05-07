@@ -19,6 +19,7 @@ class SimulationConfig:
         self.vision_radius = 1
         self.num_predators = 1
         self.num_prey = 1
+        self.num_obstacles = 3
         self.seed = 0
         self.walls: Optional[Sequence[Tuple[int, int]]] = None
 
@@ -31,6 +32,7 @@ def copy_config(base: SimulationConfig, **overrides) -> SimulationConfig:
     c.vision_radius = base.vision_radius
     c.num_predators = base.num_predators
     c.num_prey = base.num_prey
+    c.num_obstacles = base.num_obstacles
     c.seed = base.seed
     c.walls = base.walls
     for k, v in overrides.items():
@@ -75,6 +77,7 @@ class SimulationState:
         self.step_index = 0
         self.outcome = gt.OUTCOME_ONGOING
         self.cumulative_rewards = {bid: 0.0 for bid in self.env.bodies}
+        self.env.place_obstacle_random(self.config.num_obstacles, self.rng)
 
     def step_once(self) -> bool:
         if self.outcome != gt.OUTCOME_ONGOING:

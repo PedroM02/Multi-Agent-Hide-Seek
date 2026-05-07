@@ -43,12 +43,7 @@ def main() -> None:
     parser.add_argument("--predators", type=int, default=1)
     parser.add_argument("--prey", type=int, default=1)
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument(
-        "--obstacles",
-        type=str,
-        default=None,
-        help='Blocked playable cells as "x,y;x,y" (0-based indices within width x height).',
-    )
+    parser.add_argument("--obstacles", type=int, default=3, help="Number of pickable obstacle items to place.")
     args = parser.parse_args()
 
     config = SimulationConfig()
@@ -59,7 +54,8 @@ def main() -> None:
     config.num_predators = args.predators
     config.num_prey = args.prey
     config.seed = args.seed
-    config.walls = _parse_walls(args.obstacles)
+    #config.walls = _parse_walls(args.obstacles)
+    config.num_obstacles = args.obstacles
 
     if args.gui:
         from visualization import run_visualization

@@ -28,6 +28,9 @@ class DecisionMaking:
         if not legal:
             return gt.STAY
 
+        if gt.PICKUP in legal:
+            return gt.PICKUP
+        
         visible = obs["visible_enemies"]
         if visible:
             target = Perception.update_last_seen_enemy(
@@ -39,6 +42,8 @@ class DecisionMaking:
         elif last_seen_enemy is not None:
             target = last_seen_enemy
         else:
+            if gt.DROP in legal:
+                return gt.DROP
             return self._rng.choice(legal)
 
         tx, ty = target

@@ -12,8 +12,12 @@ DOWN = "down"
 LEFT = "left"
 RIGHT = "right"
 STAY = "stay"
+PICKUP = "pickup"
+DROP = "drop"
 
 ALL_MOVE_ACTIONS = (UP, DOWN, LEFT, RIGHT, STAY)
+
+ALL_ACTIONS = ALL_MOVE_ACTIONS + (PICKUP, DROP)
 
 ACTION_DELTA: dict[str, tuple[int, int]] = {
     UP: (0, -1),
@@ -21,6 +25,8 @@ ACTION_DELTA: dict[str, tuple[int, int]] = {
     LEFT: (-1, 0),
     RIGHT: (1, 0),
     STAY: (0, 0),
+    PICKUP: (0, 0),
+    DROP: (0, 0),
 }
 
 # Episode outcomes (strings)
