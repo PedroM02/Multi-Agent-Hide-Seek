@@ -32,10 +32,10 @@ def resolve_actions(
 
     move_intentions: Dict[int, str] = {}
     for aid in alive_ids:
-        act = intentions.get(aid, gt.STAY)
-        if act == gt.PICKUP:
+        act = intentions.get(aid, au.STAY)
+        if act == au.PICKUP:
             env.pickup_obstacle(aid)
-        elif act == gt.DROP:
+        elif act == au.DROP:
             env.drop_obstacle(aid)
         else:
             move_intentions[aid] = act  

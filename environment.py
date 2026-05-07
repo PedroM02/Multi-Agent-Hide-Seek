@@ -111,7 +111,7 @@ class Environment:
         if already_holding:
             return
         for obstacle in self.obstacles.values():
-            if obstacle.held_by is None:
+            if obstacle.held_by is not None:
                 continue
             if abs(obstacle.x - body.x) <= 1 and abs(obstacle.y - body.y) <= 1 and (obstacle.x != body.x or obstacle.y != body.y):
                 obstacle.held_by = agent_id
@@ -121,7 +121,7 @@ class Environment:
         body = self.bodies[agent_id]
         for obstacle in self.obstacles.values():
             if obstacle.held_by == agent_id:
-                self.obstacle.held_by = None
+                obstacle.held_by = None
                 obstacle.x = body.x
                 obstacle.y = body.y
                 return
@@ -147,13 +147,13 @@ class Environment:
         # pickup if an unclaimed obstacle is here
         if any(
             it.held_by is None 
-            and abs(it.x - body.x) <= 1 and (it.y - body.y) <= 1
+            and abs(it.x - body.x) <= 1 and abs(it.y - body.y) <= 1
             and (it.x != body.x or it.y != body.y)
             for it in self.obstacles.values()):
-            out.append(gt.PICKUP)
+            out.append(au.PICKUP)
         # drop if holding something
         if any(it.held_by == body.agent_id for it in self.obstacles.values()):
-            out.append(gt.DROP)     
+            out.append(au.DROP)     
         return tuple(out)
 
     def set_position(self, agent_id: int, x: int, y: int) -> None:

@@ -30,8 +30,8 @@ class DecisionMaking:
         if not legal:
             return au.STAY, False
 
-        if gt.PICKUP in legal:
-            return gt.PICKUP
+        if au.PICKUP in legal:
+            return au.PICKUP, False
         
         visible = obs["visible_enemies"]
         if visible:
@@ -44,8 +44,8 @@ class DecisionMaking:
             target = last_seen_enemy
             stale_target = True
         else:
-            if gt.DROP in legal:
-                return gt.DROP
+            if au.DROP in legal:
+                return au.DROP, False
             return self._rng.choice(legal), False
 
         assert target is not None

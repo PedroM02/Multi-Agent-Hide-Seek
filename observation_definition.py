@@ -38,7 +38,7 @@ def build_observation(
         (it.x, it.y, it.obstacle_id)
         for it in env.obstacles.values()
         if it.held_by is None
-        and _chebyshev_dist(body.x, body.y, it.x, it.y) <= vision_radius
+        and chebyshev(body.x, body.y, it.x, it.y) <= vision_radius
     )
 
     held = next((it.obstacle_id for it in env.obstacles.values() if it.held_by == agent_id), None)
