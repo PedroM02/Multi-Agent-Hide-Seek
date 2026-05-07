@@ -89,7 +89,7 @@ def run_visualization(config: SimulationConfig, num_runs: int = 1) -> None:
         f"Outcome={au.OUTCOME_ONGOING}  |  Seed={config.seed + total_runs - 1}"
     )
     hint_text_1 = (
-        f"Vision: Chebyshev predaror r={config.vision_radius_predator} and prey r={config.vision_radius_prey} (square side {2 * config.vision_radius_predator + 1})  |  "
+        f"Vision: Chebyshev Predaror Radius={config.vision_radius_predator} and Prey Radius={config.vision_radius_prey} (square side {2 * config.vision_radius_predator + 1})  |  "
         "Chase: visible enemy if any, else last seen"
     )
     hint_text_2 = "Next timestep: space/right   Auto Run: a   Reset Run: r   Next Run: n   Quit: esc"
