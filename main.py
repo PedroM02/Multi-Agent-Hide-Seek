@@ -50,7 +50,7 @@ def main() -> None:
     if args.gui:
         from visualization import run_visualization
 
-        run_visualization(config)
+        run_visualization(config, args.runs)
         return
 
     summary: BatchSummary = run_batch(config, args.runs)
