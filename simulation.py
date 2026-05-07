@@ -3,7 +3,7 @@ from __future__ import annotations
 import random
 from typing import Dict, List, Optional, Sequence, Tuple
 
-import game_types as gt
+import agent_utils as au
 from action_resolution import resolve_actions
 from agent import Agent, build_agents_for_env
 from environment import Environment
@@ -131,7 +131,7 @@ class SimulationState:
         self.env = Environment(config.width, config.height, walls)
         self.agents: List[Agent] = []
         self.step_index = 0
-        self.outcome = gt.OUTCOME_ONGOING
+        self.outcome = au.OUTCOME_ONGOING
         self.cumulative_rewards: Dict[int, float] = {}
         self.reset_episode()
 
@@ -145,11 +145,11 @@ class SimulationState:
         for a in self.agents:
             a.reset_memory()
         self.step_index = 0
-        self.outcome = gt.OUTCOME_ONGOING
+        self.outcome = au.OUTCOME_ONGOING
         self.cumulative_rewards = {bid: 0.0 for bid in self.env.bodies}
 
     def step_once(self) -> bool:
-        if self.outcome != gt.OUTCOME_ONGOING:
+        if self.outcome != au.OUTCOME_ONGOING:
             return False
 
         intentions: Dict[int, str] = {}
@@ -173,18 +173,18 @@ class SimulationState:
         self.step_index += 1
 
         if not self.env.any_prey_alive():
-            self.outcome = gt.OUTCOME_PREDATORS_WIN
+            self.outcome = au.OUTCOME_PREDATORS_WIN
             return False
         if self.step_index >= self.config.timesteps:
             if self.env.any_prey_alive():
-                self.outcome = gt.OUTCOME_PREY_WIN_TIMEOUT
+                self.outcome = au.OUTCOME_PREY_WIN
             else:
-                self.outcome = gt.OUTCOME_PREDATORS_WIN
+                self.outcome = au.OUTCOME_PREDATORS_WIN
             return False
         return True
 
     def status_line(self) -> str:
-        return f"step {self.step_index}/{self.config.timesteps}  outcome={self.outcome}"
+        return f"Timestep {self.step_index}/{self.config.timesteps}  Current Outcome={self.outcome}"
 
 
 def run_episode(config: SimulationConfig, rng: random.Random) -> EpisodeSummary:
@@ -215,8 +215,8 @@ def run_batch(config: SimulationConfig, num_runs: int) -> BatchSummary:
         summary = run_episode(cfg, rng)
         acc.runs += 1
         acc.total_steps += summary.steps
-        if summary.outcome == gt.OUTCOME_PREDATORS_WIN:
+        if summary.outcome == au.OUTCOME_PREDATORS_WIN:
             acc.predator_wins += 1
-        elif summary.outcome == gt.OUTCOME_PREY_WIN_TIMEOUT:
+        elif summary.outcome == au.OUTCOME_PREY_WIN:
             acc.prey_timeout_wins += 1
     return acc
