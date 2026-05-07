@@ -1,11 +1,7 @@
 from __future__ import annotations
 
-import game_types as gt
 from environment import Environment
-
-
-def _chebyshev_dist(ax: int, ay: int, bx: int, by: int) -> int:
-    return max(abs(ax - bx), abs(ay - by))
+from distances import chebyshev
 
 
 def build_observation(
@@ -34,7 +30,7 @@ def build_observation(
             continue
         if other.team == my_team:
             continue
-        if _chebyshev_dist(body.x, body.y, other.x, other.y) <= vision_radius:
+        if chebyshev(body.x, body.y, other.x, other.y) <= vision_radius:
             enemies.append((other.x, other.y, other.agent_id))
     enemies.sort(key=lambda t: (t[2], t[0], t[1]))
 

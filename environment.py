@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Iterator, Optional, Sequence, Set, Tuple
 
-import game_types as gt
+import agent_utils as au
 
 
 class AgentBody:
@@ -83,14 +83,14 @@ class Environment:
         for _ in range(num_predators):
             x, y = free[idx]
             idx += 1
-            b = AgentBody(aid, gt.TEAM_PREDATOR, x, y)
+            b = AgentBody(aid, au.TEAM_PREDATOR, x, y)
             self.place_agent(b)
             bodies.append(b)
             aid += 1
         for _ in range(num_prey):
             x, y = free[idx]
             idx += 1
-            b = AgentBody(aid, gt.TEAM_PREY, x, y)
+            b = AgentBody(aid, au.TEAM_PREY, x, y)
             self.place_agent(b)
             bodies.append(b)
             aid += 1
@@ -134,14 +134,14 @@ class Environment:
     def legal_actions_for(self, agent_id: int) -> tuple[str, ...]:
         body = self.bodies[agent_id]
         if not body.alive:
-            return (gt.STAY,)
+            return (au.STAY,)
         out: list[str] = []
-        for act in gt.ALL_MOVE_ACTIONS:
-            dx, dy = gt.ACTION_DELTA[act]
+        for act in au.MOVE_ACTIONS:
+            dx, dy = au.ACTION_DELTA[act]
             tx, ty = body.x + dx, body.y + dy
             if not self._in_bounds(tx, ty) or self.is_wall(tx, ty):
-                if act == gt.STAY:
-                    out.append(gt.STAY)
+                if act == au.STAY:
+                    out.append(au.STAY)
                 continue
             out.append(act)
         # pickup if an unclaimed obstacle is here
@@ -166,8 +166,8 @@ class Environment:
             by_cell.setdefault((b.x, b.y), []).append(b)
         captured: list[int] = []
         for _cell, group in by_cell.items():
-            preds = [b for b in group if b.team == gt.TEAM_PREDATOR]
-            preys = [b for b in group if b.team == gt.TEAM_PREY]
+            preds = [b for b in group if b.team == au.TEAM_PREDATOR]
+            preys = [b for b in group if b.team == au.TEAM_PREY]
             if preds and preys:
                 for p in preys:
                     p.alive = False
@@ -175,7 +175,7 @@ class Environment:
         return captured
 
     def any_prey_alive(self) -> bool:
-        return any(b.team == gt.TEAM_PREY and b.alive for b in self.bodies.values())
+        return any(b.team == au.TEAM_PREY and b.alive for b in self.bodies.values())
 
     def any_predator_alive(self) -> bool:
-        return any(b.team == gt.TEAM_PREDATOR and b.alive for b in self.bodies.values())
+        return any(b.team == au.TEAM_PREDATOR and b.alive for b in self.bodies.values())

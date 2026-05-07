@@ -3,7 +3,7 @@ from __future__ import annotations
 import random
 from typing import Dict, List, Tuple
 
-import game_types as gt
+import agent_utils as au
 from environment import Environment
 
 
@@ -11,7 +11,7 @@ def _target_cell(env: Environment, agent_id: int, action: str) -> Tuple[int, int
     body = env.bodies[agent_id]
     if not body.alive:
         return (body.x, body.y)
-    dx, dy = gt.ACTION_DELTA[action]
+    dx, dy = au.ACTION_DELTA[action]
     tx, ty = body.x + dx, body.y + dy
     if not (0 <= tx < env.width and 0 <= ty < env.height):
         return (body.x, body.y)

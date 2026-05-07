@@ -3,7 +3,7 @@ from __future__ import annotations
 import random
 from typing import Dict, List, Optional, Sequence, Tuple
 
-import game_types as gt
+import agent_utils as au
 from action_resolution import resolve_actions
 from agent import Agent, build_agents_for_env
 from environment import Environment
@@ -11,17 +11,75 @@ from observation_definition import build_observation
 from reward_attribution import attribute_rewards
 
 
+def generate_walls(
+    width: int,
+    height: int,
+    num_walls: int,
+    wall_size: int,
+    rng: random.Random,
+    existing_walls: Optional[Sequence[Tuple[int, int]]] = None,
+) -> List[Tuple[int, int]]:
+    """Generate `num_walls` straight wall segments (horizontal or vertical),
+    each with `wall_size` cells. Walls are placed randomly but never fill
+    an entire row/column (to keep the map passable). Already-occupied cells
+    (from `existing_walls`) are skipped.
+
+    Returns the combined list of wall cell coordinates.
+    """
+    occupied: set[Tuple[int, int]] = set(existing_walls) if existing_walls else set()
+    result: List[Tuple[int, int]] = list(occupied)
+
+    for _ in range(num_walls):
+        # Try up to 50 random placements before giving up on this wall.
+        for _attempt in range(50):
+            horizontal = rng.choice([True, False])
+            if horizontal:
+                max_x = width - wall_size
+                if max_x < 0:
+                    continue
+                ox = rng.randint(0, max_x)
+                oy = rng.randint(0, height - 1)
+                cells = [(ox + i, oy) for i in range(wall_size)]
+                # Don't block the full row
+                if len(cells) >= width:
+                    continue
+            else:
+                max_y = height - wall_size
+                if max_y < 0:
+                    continue
+                ox = rng.randint(0, width - 1)
+                oy = rng.randint(0, max_y)
+                cells = [(ox, oy + i) for i in range(wall_size)]
+                # Don't block the full column
+                if len(cells) >= height:
+                    continue
+
+            # Skip if any cell already occupied
+            if any(c in occupied for c in cells):
+                continue
+
+            for c in cells:
+                occupied.add(c)
+            result.extend(cells)
+            break
+
+    return result
+
+
 class SimulationConfig:
     def __init__(self) -> None:
         self.width = 10
         self.height = 8
         self.timesteps = 200
-        self.vision_radius = 1
-        self.num_predators = 1
+        self.vision_radius_predator = 1
+        self.vision_radius_prey = 1
+        self.num_predators = 5
         self.num_prey = 1
         self.num_obstacles = 3
         self.seed = 0
         self.walls: Optional[Sequence[Tuple[int, int]]] = None
+        self.num_walls: int = 0
+        self.wall_size: int = 3
 
 
 def copy_config(base: SimulationConfig, **overrides) -> SimulationConfig:
@@ -29,12 +87,15 @@ def copy_config(base: SimulationConfig, **overrides) -> SimulationConfig:
     c.width = base.width
     c.height = base.height
     c.timesteps = base.timesteps
-    c.vision_radius = base.vision_radius
+    c.vision_radius_predator = base.vision_radius_predator
+    c.vision_radius_prey = base.vision_radius_prey
     c.num_predators = base.num_predators
     c.num_prey = base.num_prey
     c.num_obstacles = base.num_obstacles
     c.seed = base.seed
     c.walls = base.walls
+    c.num_walls = base.num_walls
+    c.wall_size = base.wall_size
     for k, v in overrides.items():
         setattr(c, k, v)
     return c
@@ -58,10 +119,23 @@ class SimulationState:
     def __init__(self, config: SimulationConfig, rng: random.Random) -> None:
         self.config = config
         self.rng = rng
-        self.env = Environment(config.width, config.height, config.walls)
+
+        # Resolve wall cells: manual --obstacles + auto-generated walls.
+        walls = config.walls
+        if config.num_walls > 0:
+            walls = generate_walls(
+                config.width,
+                config.height,
+                config.num_walls,
+                config.wall_size,
+                rng,
+                existing_walls=walls,
+            )
+
+        self.env = Environment(config.width, config.height, walls)
         self.agents: List[Agent] = []
         self.step_index = 0
-        self.outcome = gt.OUTCOME_ONGOING
+        self.outcome = au.OUTCOME_ONGOING
         self.cumulative_rewards: Dict[int, float] = {}
         self.reset_episode()
 
@@ -75,12 +149,12 @@ class SimulationState:
         for a in self.agents:
             a.reset_memory()
         self.step_index = 0
-        self.outcome = gt.OUTCOME_ONGOING
+        self.outcome = au.OUTCOME_ONGOING
         self.cumulative_rewards = {bid: 0.0 for bid in self.env.bodies}
         self.env.place_obstacle_random(self.config.num_obstacles, self.rng)
 
     def step_once(self) -> bool:
-        if self.outcome != gt.OUTCOME_ONGOING:
+        if self.outcome != au.OUTCOME_ONGOING:
             return False
 
         intentions: Dict[int, str] = {}
@@ -88,11 +162,18 @@ class SimulationState:
             body = self.env.bodies[agent.agent_id]
             if not body.alive:
                 continue
-            obs = build_observation(
-                self.env,
-                agent.agent_id,
-                self.config.vision_radius,
-            )
+            if body.team == "predator":
+                obs = build_observation(
+                    self.env,
+                    agent.agent_id,
+                    self.config.vision_radius_predator,
+                )
+            else:
+                obs = build_observation(
+                    self.env,
+                    agent.agent_id,
+                    self.config.vision_radius_prey,
+                )
             intentions[agent.agent_id] = agent.decide(obs)
 
         resolve_actions(self.env, intentions, self.rng)
@@ -104,18 +185,18 @@ class SimulationState:
         self.step_index += 1
 
         if not self.env.any_prey_alive():
-            self.outcome = gt.OUTCOME_PREDATORS_WIN
+            self.outcome = au.OUTCOME_PREDATORS_WIN
             return False
         if self.step_index >= self.config.timesteps:
             if self.env.any_prey_alive():
-                self.outcome = gt.OUTCOME_PREY_WIN_TIMEOUT
+                self.outcome = au.OUTCOME_PREY_WIN
             else:
-                self.outcome = gt.OUTCOME_PREDATORS_WIN
+                self.outcome = au.OUTCOME_PREDATORS_WIN
             return False
         return True
 
     def status_line(self) -> str:
-        return f"step {self.step_index}/{self.config.timesteps}  outcome={self.outcome}"
+        return f"Timestep {self.step_index}/{self.config.timesteps}  Current Outcome={self.outcome}"
 
 
 def run_episode(config: SimulationConfig, rng: random.Random) -> EpisodeSummary:
@@ -146,8 +227,8 @@ def run_batch(config: SimulationConfig, num_runs: int) -> BatchSummary:
         summary = run_episode(cfg, rng)
         acc.runs += 1
         acc.total_steps += summary.steps
-        if summary.outcome == gt.OUTCOME_PREDATORS_WIN:
+        if summary.outcome == au.OUTCOME_PREDATORS_WIN:
             acc.predator_wins += 1
-        elif summary.outcome == gt.OUTCOME_PREY_WIN_TIMEOUT:
+        elif summary.outcome == au.OUTCOME_PREY_WIN:
             acc.prey_timeout_wins += 1
     return acc
