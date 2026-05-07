@@ -1,9 +1,9 @@
 from __future__ import annotations
+from decision_making import DecisionMaking
+from perception import Perception
 
 import random
 
-from decision_making import DecisionMaking
-from perception import Perception
 
 
 class Agent:
