@@ -17,6 +17,9 @@ def _target_cell(env: Environment, agent_id: int, action: str) -> Tuple[int, int
         return (body.x, body.y)
     if env.is_wall(tx, ty):
         return (body.x, body.y)
+    for obstacle in env.obstacles.values():
+        if obstacle.held_by is None and obstacle.x == tx and obstacle.y == ty:
+            return (body.x, body.y)
     return (tx, ty)
 
 
@@ -26,10 +29,21 @@ def resolve_actions(
     rng: random.Random,
 ) -> dict:
     alive_ids = [bid for bid, b in env.bodies.items() if b.alive]
-    targets: Dict[int, Tuple[int, int]] = {}
+
+    move_intentions: Dict[int, str] = {}
     for aid in alive_ids:
-        act = intentions.get(aid, au.STAY)
-        targets[aid] = _target_cell(env, aid, act)
+        act = intentions.get(aid, gt.STAY)
+        if act == gt.PICKUP:
+            env.pickup_obstacle(aid)
+        elif act == gt.DROP:
+            env.drop_obstacle(aid)
+        else:
+            move_intentions[aid] = act  
+
+
+    targets: Dict[int, Tuple[int, int]] = {}
+    for aid in move_intentions:
+        targets[aid] = _target_cell(env, aid, move_intentions[aid])
 
     by_cell: Dict[Tuple[int, int], List[int]] = {}
     for aid, cell in targets.items():

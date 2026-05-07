@@ -17,6 +17,7 @@ GRID_WALL = (35, 35, 40)
 GRID_EMPTY = (210, 210, 215)
 GRID_PRED = (110, 55, 180)
 GRID_PREY = (55, 160, 75)
+GRID_OBSTACLE = (220, 180, 40)
 
 
 def _blit_legend(surface: pygame.Surface, font: pygame.font.Font, x: int, y: int) -> int:
@@ -56,6 +57,12 @@ def _draw_grid(
         rect = pygame.Rect(b.x * CELL + 2, b.y * CELL + 2, CELL - 4, CELL - 4)
         col = GRID_PRED if b.team == au.TEAM_PREDATOR else GRID_PREY
         pygame.draw.rect(grid_surf, col, rect, border_radius=4)
+    for item in env.obstacles.values():
+        if item.held_by is not None:
+            continue
+        cx = item.x * CELL + CELL // 2
+        cy = item.y * CELL + CELL // 2
+        pygame.draw.circle(grid_surf, GRID_OBSTACLE, (cx, cy), CELL // 5)   
     grid_x = max(0, (surface.get_width() - grid_w) // 2)
     surface.blit(grid_surf, (grid_x, MARGIN_TOP))
 

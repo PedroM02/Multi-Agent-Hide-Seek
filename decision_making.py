@@ -30,6 +30,9 @@ class DecisionMaking:
         if not legal:
             return au.STAY, False
 
+        if gt.PICKUP in legal:
+            return gt.PICKUP
+        
         visible = obs["visible_enemies"]
         if visible:
             # Agent.decide already refreshed last_seen_enemy to the chosen
@@ -41,6 +44,8 @@ class DecisionMaking:
             target = last_seen_enemy
             stale_target = True
         else:
+            if gt.DROP in legal:
+                return gt.DROP
             return self._rng.choice(legal), False
 
         assert target is not None

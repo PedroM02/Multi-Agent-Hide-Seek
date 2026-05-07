@@ -20,6 +20,8 @@ def build_observation(
             "ego_y": body.y,
             "vision_radius": vision_radius,
             "visible_enemies": tuple(),
+            "visible_obstacles": tuple(),
+            "held_obstacle": None,
             "legal_actions": legal,
         }
     my_team = body.team
@@ -31,6 +33,16 @@ def build_observation(
         if chebyshev(body.x, body.y, other.x, other.y) <= vision_radius:
             enemies.append((other.x, other.y, other.agent_id))
     enemies.sort(key=lambda t: (t[2], t[0], t[1]))
+
+    visible_obstacles = tuple(
+        (it.x, it.y, it.obstacle_id)
+        for it in env.obstacles.values()
+        if it.held_by is None
+        and _chebyshev_dist(body.x, body.y, it.x, it.y) <= vision_radius
+    )
+
+    held = next((it.obstacle_id for it in env.obstacles.values() if it.held_by == agent_id), None)
+
     return {
         "agent_id": agent_id,
         "team": body.team,
@@ -38,5 +50,7 @@ def build_observation(
         "ego_y": body.y,
         "vision_radius": vision_radius,
         "visible_enemies": tuple(enemies),
+        "visible_obstacles": visible_obstacles,
+        "held_obstacle": held,
         "legal_actions": legal,
     }

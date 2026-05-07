@@ -11,8 +11,12 @@ DOWN = "down"
 LEFT = "left"
 RIGHT = "right"
 STAY = "stay"
+PICKUP = "pickup"
+DROP = "drop"
 
 MOVE_ACTIONS = (UP, DOWN, LEFT, RIGHT, STAY)
+ALL_ACTIONS = MOVE_ACTIONS + (PICKUP, DROP)
+
 
 ACTION_DELTA = {
     UP: (0, -1),
@@ -20,6 +24,8 @@ ACTION_DELTA = {
     LEFT: (-1, 0),
     RIGHT: (1, 0),
     STAY: (0, 0),
+    PICKUP: (0, 0),
+    DROP: (0, 0),
 }
 
 # Episode outcomes
