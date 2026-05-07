@@ -36,7 +36,8 @@ def _draw_grid(
     env: Environment,
     font: pygame.font.Font,
     status: str,
-    vision_radius: int,
+    vision_radius_predator: int,
+    vision_radius_prey: int
 ) -> None:
     surface.fill(HUD_COLOR)
     grid_w = env.width * CELL
@@ -61,7 +62,7 @@ def _draw_grid(
     surface.blit(font.render(status, True, (240, 240, 245)), (PAD_X, 8))
     _blit_legend(surface, font, PAD_X, 34)
     hint_1 = font.render(
-        f"Vision: Chebyshev r={vision_radius} (square side {2 * vision_radius + 1})  |  "
+        f"Vision: Chebyshev predaror r={vision_radius_predator} and prey r={vision_radius_prey} (square side {2 * vision_radius_predator + 1})  |  "
         "Chase: visible enemy if any, else last seen",
         True,
         (170, 170, 180),
@@ -82,7 +83,7 @@ def run_visualization(config: SimulationConfig) -> None:
     font = pygame.font.Font(None, 18)
     status_sample = f"step 0/{config.timesteps}  outcome={gt.OUTCOME_ONGOING}  |  seed={config.seed}"
     hint_text_1 = (
-        f"Vision: Chebyshev r={config.vision_radius} (square side {2 * config.vision_radius + 1})  |  "
+        f"Vision: Chebyshev predaror r={config.vision_radius_predator} and prey r={config.vision_radius_prey} (square side {2 * config.vision_radius_predator + 1})  |  "
         "Chase: visible enemy if any, else last seen"
     )
     hint_text_2 = "Space/Right: step   a: auto   r: reset   Esc: quit"
@@ -122,7 +123,7 @@ def run_visualization(config: SimulationConfig) -> None:
                 if sim.outcome == gt.OUTCOME_ONGOING:
                     sim.step_once()
 
-        _draw_grid(screen, sim.env, font, status_text(), config.vision_radius)
+        _draw_grid(screen, sim.env, font, status_text(), config.vision_radius_predator, config.vision_radius_prey)
         pygame.display.flip()
         clock.tick(60)
 

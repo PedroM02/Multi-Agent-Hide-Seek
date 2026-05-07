@@ -71,8 +71,9 @@ class SimulationConfig:
         self.width = 10
         self.height = 8
         self.timesteps = 200
-        self.vision_radius = 1
-        self.num_predators = 1
+        self.vision_radius_predator = 1
+        self.vision_radius_prey = 1
+        self.num_predators = 5
         self.num_prey = 1
         self.seed = 0
         self.walls: Optional[Sequence[Tuple[int, int]]] = None
@@ -85,7 +86,8 @@ def copy_config(base: SimulationConfig, **overrides) -> SimulationConfig:
     c.width = base.width
     c.height = base.height
     c.timesteps = base.timesteps
-    c.vision_radius = base.vision_radius
+    c.vision_radius_predator = base.vision_radius_predator
+    c.vision_radius_prey = base.vision_radius_prey
     c.num_predators = base.num_predators
     c.num_prey = base.num_prey
     c.seed = base.seed
@@ -157,11 +159,18 @@ class SimulationState:
             body = self.env.bodies[agent.agent_id]
             if not body.alive:
                 continue
-            obs = build_observation(
-                self.env,
-                agent.agent_id,
-                self.config.vision_radius,
-            )
+            if body.team == "predator":
+                obs = build_observation(
+                    self.env,
+                    agent.agent_id,
+                    self.config.vision_radius_predator,
+                )
+            else:
+                obs = build_observation(
+                    self.env,
+                    agent.agent_id,
+                    self.config.vision_radius_prey,
+                )
             intentions[agent.agent_id] = agent.decide(obs)
 
         resolve_actions(self.env, intentions, self.rng)
