@@ -9,8 +9,8 @@ def build_observation(
     agent_id: int,
     vision_radius: int,
 ) -> dict:
-    body = env.bodies[agent_id]
-    legal = env.legal_actions_for(agent_id)
+    body = env.agent_bodies[agent_id]
+    legal = env.legal_actions(agent_id)
     enemies: list[tuple[int, int, int]] = []
     if not body.alive:
         return {
@@ -23,7 +23,7 @@ def build_observation(
             "legal_actions": legal,
         }
     my_team = body.team
-    for other in env.bodies.values():
+    for other in env.agent_bodies.values():
         if other.agent_id == agent_id or not other.alive:
             continue
         if other.team == my_team:

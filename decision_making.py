@@ -62,8 +62,32 @@ class DecisionMaking:
 
             return min(legal, key=score), False
 
+        # Prey primarily flees the closest seen predator (target), but when
+        # possible it avoids moves that reduce distance to any other visible
+        # predator.
+        current_other_dists: dict[int, int] = {}
+        for ex, ey, eid in visible:
+            if ex == tx and ey == ty:
+                continue
+            current_other_dists[eid] = manhattan(ego_x, ego_y, ex, ey)
+
+        safe_actions: list[str] = []
+        for act in legal:
+            nx, ny = _apply_action(ego_x, ego_y, act)
+            gets_closer_to_other = False
+            for ex, ey, eid in visible:
+                if eid not in current_other_dists:
+                    continue
+                if manhattan(nx, ny, ex, ey) < current_other_dists[eid]:
+                    gets_closer_to_other = True
+                    break
+            if not gets_closer_to_other:
+                safe_actions.append(act)
+
+        candidate_actions = safe_actions if safe_actions else legal
+
         def score_prey(act: str) -> tuple[int, int]:
             nx, ny = _apply_action(ego_x, ego_y, act)
             return (-manhattan(nx, ny, tx, ty), self._rng.randint(0, 1000))
 
-        return min(legal, key=score_prey), False
+        return min(candidate_actions, key=score_prey), False

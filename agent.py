@@ -46,7 +46,7 @@ class Agent:
 def build_agents_for_env(env, rng: random.Random) -> list[Agent]:
     shared_perception = Perception()
     agents: list[Agent] = []
-    for body in sorted(env.bodies.values(), key=lambda b: b.agent_id):
+    for body in sorted(env.agent_bodies.values(), key=lambda b: b.agent_id):
         # Each agent gets its own RNGs seeded from the parent — avoids
         # coupled "random" choices where both agents draw from the same
         # generator state in the same step. Perception and decision use

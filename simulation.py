@@ -136,7 +136,7 @@ class SimulationState:
         self.reset_episode()
 
     def reset_episode(self) -> None:
-        self.env.reset_agent_positions_random(
+        self.env.set_agent_positions(
             self.config.num_predators,
             self.config.num_prey,
             self.rng,
@@ -146,7 +146,7 @@ class SimulationState:
             a.reset_memory()
         self.step_index = 0
         self.outcome = au.OUTCOME_ONGOING
-        self.cumulative_rewards = {bid: 0.0 for bid in self.env.bodies}
+        self.cumulative_rewards = {bid: 0.0 for bid in self.env.agent_bodies}
 
     def step_once(self) -> bool:
         if self.outcome != au.OUTCOME_ONGOING:
@@ -154,7 +154,7 @@ class SimulationState:
 
         intentions: Dict[int, str] = {}
         for agent in self.agents:
-            body = self.env.bodies[agent.agent_id]
+            body = self.env.agent_bodies[agent.agent_id]
             if not body.alive:
                 continue
             obs = build_observation(

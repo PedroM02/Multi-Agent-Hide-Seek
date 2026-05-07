@@ -49,7 +49,7 @@ def _draw_grid(
             if env.is_wall(x, y):
                 pygame.draw.rect(grid_surf, GRID_WALL, rect)
             pygame.draw.rect(grid_surf, (0, 0, 0), rect, 1)
-    for b in env.bodies.values():
+    for b in env.agent_bodies.values():
         if not b.alive:
             continue
         rect = pygame.Rect(b.x * CELL + 2, b.y * CELL + 2, CELL - 4, CELL - 4)
