@@ -31,7 +31,7 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--walls", type=int, default=2, dest="num_walls", help="Number of wall segments to generate randomly.",)
     parser.add_argument("--wall-size", type=int, default=2, dest="wall_size", help="Length (in cells) of each randomly generated wall segment.",)
-    parser.add_argument("--obstacles", type=int, default=3, help="Number of pickable obstacle items to place.")
+    parser.add_argument("--obstacles", type=int, default=0, help="Number of pickable obstacle items (0 = none; default). Set > 0 to enable.",)
     args = parser.parse_args()
 
     config = SimulationConfig()

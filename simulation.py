@@ -75,7 +75,7 @@ class SimulationConfig:
         self.vision_radius_prey = 1
         self.num_predators = 5
         self.num_prey = 1
-        self.num_obstacles = 3
+        self.num_obstacles = 0
         self.seed = 0
         self.walls: Optional[Sequence[Tuple[int, int]]] = None
         self.num_walls: int = 0
@@ -151,7 +151,7 @@ class SimulationState:
         self.step_index = 0
         self.outcome = au.OUTCOME_ONGOING
         self.cumulative_rewards = {bid: 0.0 for bid in self.env.agent_bodies}
-        self.env.place_obstacle_random(self.config.num_obstacles, self.rng)
+        self.env.set_obstacle_positions(self.config.num_obstacles, self.rng)
 
     def step_once(self) -> bool:
         if self.outcome != au.OUTCOME_ONGOING:

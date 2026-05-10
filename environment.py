@@ -11,11 +11,12 @@ class AgentBody:
         self.alive = alive
 
 class Obstacle:
+    """Defines a movable obstacle in the environment, which can be picked up, held, and dropped by agents."""
     def __init__(self, obstacle_id, x, y):
         self.obstacle_id = obstacle_id
         self.x = x
         self.y = y
-        self.held_by: int | None = None
+        self.held_by = None
 
 class Environment:
     """Rectangle of dimensions (width, height) with optional obstacle cells."""
@@ -94,36 +95,42 @@ class Environment:
             self.place_agent(agent_body)
             bodies.append(agent_body)    
             agent_id += 1
-        return bodies
+
     
-    def place_obstacle_random(self, n: int, rng) -> None:
+    def set_obstacle_positions(self, n, rng):
+
+        # Reset obstacles and get available cells to place obstacles
         self.obstacles.clear()
-        occupied = {(b.x, b.y) for b in self.agent_bodies.values()}
-        free = [c for c in self.get_free_cells() if c not in occupied]
+        occupied = {(agent_body.x, agent_body.y) for agent_body in self.agent_bodies.values()}
+        free = [cell for cell in self.get_free_cells() if cell not in occupied]
+        # Shuffle free cell list so they are not in a specific order
         rng.shuffle(free)
+        # Place obstacles in the environment
         for i, (x, y) in enumerate(free[:n]):
             self.obstacles[i] = Obstacle(obstacle_id=i, x=x, y=y)
 
             
-    def pickup_obstacle(self, agent_id: int) -> None:
-        body = self.agent_bodies[agent_id]
-        already_holding = any(it.held_by == agent_id for it in self.obstacles.values())
+    def pickup_obstacle(self, agent_id):
+        agent_body = self.agent_bodies[agent_id]
+        # check if agent is already holding an obstacle
+        already_holding = any(obstacle.held_by == agent_id for obstacle in self.obstacles.values())
         if already_holding:
             return
+        # check if there is an untaken obstacle within 1 cell of the agent
         for obstacle in self.obstacles.values():
             if obstacle.held_by is not None:
                 continue
-            if abs(obstacle.x - body.x) <= 1 and abs(obstacle.y - body.y) <= 1 and (obstacle.x != body.x or obstacle.y != body.y):
+            if abs(obstacle.x - agent_body.x) <= 1 and abs(obstacle.y - agent_body.y) <= 1 and (obstacle.x != agent_body.x or obstacle.y != agent_body.y):
                 obstacle.held_by = agent_id
                 return
     
-    def drop_obstacle(self, agent_id: int) -> None:
-        body = self.agent_bodies[agent_id]
+    def drop_obstacle(self, agent_id):
+        agent_body = self.agent_bodies[agent_id]
         for obstacle in self.obstacles.values():
             if obstacle.held_by == agent_id:
                 obstacle.held_by = None
-                obstacle.x = body.x
-                obstacle.y = body.y
+                obstacle.x = agent_body.x
+                obstacle.y = agent_body.y
                 return
 
     def alive_bodies(self):
@@ -137,7 +144,8 @@ class Environment:
         # If agent is not alive, it must not do anything
         if not agent_body.alive:
             return (au.STAY,)
-        # Check all possible actions and assess legality
+
+        # Check all possible movement actions and assess legality
         for action in au.MOVE_ACTIONS:
             delta_x, delta_y = au.ACTION_DELTA[action]
             next_x, next_y = agent_body.x + delta_x, agent_body.y + delta_y
@@ -148,16 +156,22 @@ class Environment:
                     output_actions.append(au.STAY)
                 continue
             output_actions.append(action)
-        # pickup if an unclaimed obstacle is here
+        
+        # Pick obstacle up if an unclaimed obstacle is here
         if any(
-            it.held_by is None 
-            and abs(it.x - agent_body.x) <= 1 and abs(it.y - agent_body.y) <= 1
-            and (it.x != agent_body.x or it.y != agent_body.y)
-            for it in self.obstacles.values()):
+            # Obstacle is not held by any agent
+            obstacle.held_by is None 
+            # Obstacle is within 1 cell of the agent
+            and abs(obstacle.x - agent_body.x) <= 1 and abs(obstacle.y - agent_body.y) <= 1
+            # Obstacle is not in the same cell as the agent
+            and (obstacle.x != agent_body.x or obstacle.y != agent_body.y)
+            for obstacle in self.obstacles.values()):
             output_actions.append(au.PICKUP)
-        # drop if holding something
-        if any(it.held_by == agent_body.agent_id for it in self.obstacles.values()):
-            output_actions.append(au.DROP)     
+        
+        # Drop obstacle if holding
+        if any(obstacle.held_by == agent_body.agent_id for obstacle in self.obstacles.values()):
+            output_actions.append(au.DROP)
+
         return tuple(output_actions)
 
     def set_position(self, agent_id, x, y):
