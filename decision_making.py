@@ -32,12 +32,15 @@ class DecisionMaking:
 
         if au.PICKUP in legal:
             return au.PICKUP, False
-        
-        visible = obs["visible_enemies"]
-        if visible:
+
+        # `active_enemies` is the set the agent is currently tracking this
+        # step, chosen by priority in Agent.decide: direct sightings if any,
+        # otherwise teammate reports, otherwise empty (memory-only fallback).
+        active = obs["active_enemies"]
+        if active:
             # Agent.decide already refreshed last_seen_enemy to the chosen
-            # currently-visible enemy this step, so reuse it instead of
-            # re-running perception (which would also burn another RNG draw).
+            # tracked enemy this step, so reuse it instead of re-running
+            # perception (which would also burn another RNG draw).
             target = last_seen_enemy
             stale_target = False
         elif last_seen_enemy is not None:
@@ -67,11 +70,12 @@ class DecisionMaking:
 
             return min(legal, key=score), False
 
-        # Prey primarily flees the closest seen predator (target), but when
-        # possible it avoids moves that reduce distance to any other visible
-        # predator.
+        # Prey primarily flees the closest tracked predator (target), but
+        # when possible it also avoids moves that reduce distance to any
+        # other predator in the active set (direct sight or teammate
+        # report, whichever supplied the active set this step).
         current_other_dists: dict[int, int] = {}
-        for ex, ey, eid in visible:
+        for ex, ey, eid in active:
             if ex == tx and ey == ty:
                 continue
             current_other_dists[eid] = manhattan(ego_x, ego_y, ex, ey)
@@ -80,7 +84,7 @@ class DecisionMaking:
         for act in legal:
             nx, ny = _apply_action(ego_x, ego_y, act)
             gets_closer_to_other = False
-            for ex, ey, eid in visible:
+            for ex, ey, eid in active:
                 if eid not in current_other_dists:
                     continue
                 if manhattan(nx, ny, ex, ey) < current_other_dists[eid]:

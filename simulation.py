@@ -66,20 +66,55 @@ def generate_walls(
     return result
 
 
+def _exchange_team_messages(
+    raw_obs: Dict[int, dict],
+) -> Dict[int, Tuple[Tuple[int, int, int], ...]]:
+    """Speaker-centric, single-hop, synchronous team comms.
+
+    Every agent broadcasts the enemies it directly sees this step to the
+    teammates inside its own vision radius (its visible_allies). The
+    receiver collects everything it was told, deduped by enemy_id, sorted
+    deterministically. The receiver's own direct sightings are not
+    filtered out here — priority handling lives in Agent.decide.
+    """
+    shared: Dict[int, list] = {aid: [] for aid in raw_obs}
+    for sender_obs in raw_obs.values():
+        sightings = sender_obs["visible_enemies"]
+        if not sightings:
+            continue
+        for _ax, _ay, ally_id in sender_obs["visible_allies"]:
+            if ally_id in shared:
+                shared[ally_id].extend(sightings)
+
+    out: Dict[int, Tuple[Tuple[int, int, int], ...]] = {}
+    for aid, lst in shared.items():
+        seen_ids: set[int] = set()
+        deduped: List[Tuple[int, int, int]] = []
+        for ex, ey, eid in lst:
+            if eid in seen_ids:
+                continue
+            seen_ids.add(eid)
+            deduped.append((ex, ey, eid))
+        deduped.sort(key=lambda t: (t[2], t[0], t[1]))
+        out[aid] = tuple(deduped)
+    return out
+
+
 class SimulationConfig:
     def __init__(self) -> None:
         self.width = 10
         self.height = 8
         self.timesteps = 200
-        self.vision_radius_predator = 1
-        self.vision_radius_prey = 1
-        self.num_predators = 5
+        self.vision_radius_predator = 2
+        self.vision_radius_prey = 2
+        self.num_predators = 1
         self.num_prey = 1
         self.num_obstacles = 0
         self.seed = 0
         self.walls: Optional[Sequence[Tuple[int, int]]] = None
         self.num_walls: int = 0
         self.wall_size: int = 3
+        self.enable_comms: bool = False
 
 
 def copy_config(base: SimulationConfig, **overrides) -> SimulationConfig:
@@ -96,6 +131,7 @@ def copy_config(base: SimulationConfig, **overrides) -> SimulationConfig:
     c.walls = base.walls
     c.num_walls = base.num_walls
     c.wall_size = base.wall_size
+    c.enable_comms = base.enable_comms
     for k, v in overrides.items():
         setattr(c, k, v)
     return c
@@ -157,23 +193,40 @@ class SimulationState:
         if self.outcome != au.OUTCOME_ONGOING:
             return False
 
+        # Phase 1: build raw observations for every alive agent.
+        raw_obs: Dict[int, dict] = {}
+        for agent in self.agents:
+            body = self.env.agent_bodies[agent.agent_id]
+            if not body.alive:
+                continue
+            radius = (
+                self.config.vision_radius_predator
+                if body.team == au.TEAM_PREDATOR
+                else self.config.vision_radius_prey
+            )
+            raw_obs[agent.agent_id] = build_observation(
+                self.env, agent.agent_id, radius,
+            )
+
+        # Phase 2: synchronous, single-hop, speaker-centric team comms.
+        # Every agent broadcasts its directly-visible enemies to teammates
+        # within its own vision radius (i.e. its visible_allies). Skipped
+        # entirely when comms are disabled, so receivers see empty reports
+        # and Agent.decide collapses to direct-sight + memory.
+        if self.config.enable_comms:
+            shared_enemies = _exchange_team_messages(raw_obs)
+        else:
+            shared_enemies = {aid: tuple() for aid in raw_obs}
+
+        # Phase 3: agents decide using direct sightings, then teammate
+        # reports, then their own memory.
         intentions: Dict[int, str] = {}
         for agent in self.agents:
             body = self.env.agent_bodies[agent.agent_id]
             if not body.alive:
                 continue
-            if body.team == "predator":
-                obs = build_observation(
-                    self.env,
-                    agent.agent_id,
-                    self.config.vision_radius_predator,
-                )
-            else:
-                obs = build_observation(
-                    self.env,
-                    agent.agent_id,
-                    self.config.vision_radius_prey,
-                )
+            obs = dict(raw_obs[agent.agent_id])
+            obs["shared_enemies"] = shared_enemies[agent.agent_id]
             intentions[agent.agent_id] = agent.decide(obs)
 
         resolve_actions(self.env, intentions, self.rng)

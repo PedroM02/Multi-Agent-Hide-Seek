@@ -28,16 +28,35 @@ class Agent:
     def decide(self, obs: dict) -> str:
         assert obs["agent_id"] == self.agent_id
         assert obs["team"] == self.team
-        vis = Perception.update_last_seen_enemy(
-            obs["ego_x"],
-            obs["ego_y"],
-            self.team,
-            obs["visible_enemies"],
-            self.rng,
-        )
-        if vis is not None:
-            self.last_seen_enemy = vis
-        action, clear_memory = self.decision.choose_action(obs, self.last_seen_enemy)
+
+        direct = obs["visible_enemies"]
+        shared = obs.get("shared_enemies", tuple())
+
+        # Strict priority: direct sight > teammate report > memory.
+        # Teammate info is at most one step old (synchronous, single-hop)
+        # so when we use it we also refresh memory — this guarantees the
+        # agent's fallback memory never gets older than the freshest signal
+        # the team has been able to provide.
+        if direct:
+            active = direct
+            vis = Perception.update_last_seen_enemy(
+                obs["ego_x"], obs["ego_y"], self.team, direct, self.rng,
+            )
+            if vis is not None:
+                self.last_seen_enemy = vis
+        elif shared:
+            active = shared
+            vis = Perception.update_last_seen_enemy(
+                obs["ego_x"], obs["ego_y"], self.team, shared, self.rng,
+            )
+            if vis is not None:
+                self.last_seen_enemy = vis
+        else:
+            active = tuple()
+
+        decision_obs = dict(obs)
+        decision_obs["active_enemies"] = active
+        action, clear_memory = self.decision.choose_action(decision_obs, self.last_seen_enemy)
         if clear_memory:
             self.last_seen_enemy = None
         return action

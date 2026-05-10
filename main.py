@@ -24,14 +24,15 @@ def main() -> None:
     parser.add_argument("--height", type=int, default=8, help="Playable cells tall.")
     parser.add_argument("--timestep", "--timesteps", type=int, default=200, dest="timesteps", help="Maximum timesteps per run (one episode ends earlier if all prey are caught).",)
     parser.add_argument("--runs", type=int, default=1, help="How many full runs to execute (each run uses --timesteps as the step cap).",)
-    parser.add_argument("--vision_predator", type=int, default=1, help="Chebyshev vision radius.")
-    parser.add_argument("--vision_prey", type=int, default=1, help="Chebyshev prey vision radius.")
+    parser.add_argument("--vision-predator", type=int, default=2, help="Chebyshev vision radius.")
+    parser.add_argument("--vision-prey", type=int, default=2, help="Chebyshev prey vision radius.")
     parser.add_argument("--predators", type=int, default=1)
     parser.add_argument("--prey", type=int, default=1)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--walls", type=int, default=2, dest="num_walls", help="Number of wall segments to generate randomly.",)
     parser.add_argument("--wall-size", type=int, default=2, dest="wall_size", help="Length (in cells) of each randomly generated wall segment.",)
     parser.add_argument("--obstacles", type=int, default=0, help="Number of pickable obstacle items (0 = none; default). Set > 0 to enable.",)
+    parser.add_argument("--comms", action="store_true", help="Enable team communications (opt-in). Each agent broadcasts directly-visible enemies to teammates inside its vision radius; receivers fall back from direct sight to teammate reports to memory.",)
     args = parser.parse_args()
 
     config = SimulationConfig()
@@ -46,6 +47,7 @@ def main() -> None:
     config.num_walls = args.num_walls
     config.wall_size = args.wall_size
     config.num_obstacles = args.obstacles
+    config.enable_comms = args.comms
 
     if args.gui:
         from visualization import run_visualization

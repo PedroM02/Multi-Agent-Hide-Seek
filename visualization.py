@@ -69,7 +69,7 @@ def _draw_grid(
     surface.blit(font.render(status, True, (240, 240, 245)), (PAD_X, 8))
     _blit_legend(surface, font, PAD_X, 34)
     hint_1 = font.render(
-        f"Vision: Chebyshev predaror r={vision_radius_predator} and prey r={vision_radius_prey} (square side {2 * vision_radius_predator + 1})  |  "
+        f"Vision: Chebyshev predator r={vision_radius_predator} and prey r={vision_radius_prey} (square side {2 * vision_radius_predator + 1})  |  "
         "Chase: visible enemy if any, else last seen",
         True,
         (170, 170, 180),
@@ -96,7 +96,7 @@ def run_visualization(config: SimulationConfig, num_runs: int = 1) -> None:
         f"Outcome={au.OUTCOME_ONGOING}  |  Seed={config.seed + total_runs - 1}"
     )
     hint_text_1 = (
-        f"Vision: Chebyshev Predaror Radius={config.vision_radius_predator} and Prey Radius={config.vision_radius_prey} (square side {2 * config.vision_radius_predator + 1})  |  "
+        f"Vision: Chebyshev Predator Radius={config.vision_radius_predator} and Prey Radius={config.vision_radius_prey} (square side {2 * config.vision_radius_predator + 1})  |  "
         "Chase: visible enemy if any, else last seen"
     )
     hint_text_2 = "Next timestep: space/right   Auto Run: a   Reset Run: r   Next Run: n   Quit: esc"
