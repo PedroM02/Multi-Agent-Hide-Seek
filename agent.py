@@ -4,6 +4,8 @@ from perception import Perception
 
 import random
 
+import agent_utils as au
+
 
 
 class Agent:
@@ -21,42 +23,53 @@ class Agent:
         self.decision = decision
         self.rng = rng
         self.last_seen_enemy: tuple[int, int] | None = None
+        # Role assignment is written by the team role selector each step
+        # (see simulation.step_once). The role_target is sticky between
+        # selector calls when still valid; the selector itself preserves it.
+        self.role: str = au.ROLE_CHASER if team == au.TEAM_PREDATOR else au.ROLE_FLEE
+        self.role_target: tuple[int, int] | None = None
 
     def reset_memory(self) -> None:
         self.last_seen_enemy = None
+        self.role = au.ROLE_CHASER if self.team == au.TEAM_PREDATOR else au.ROLE_FLEE
+        self.role_target = None
+
+    def prepare_observation(
+        self,
+        obs: dict,
+        shared_enemies: tuple[tuple[int, int, int], ...],
+    ) -> None:
+        """Fuse the raw observation with teammate reports.
+
+        Run once per step before the role selector and before decide. The
+        agent uses its perception module to collapse direct sight +
+        teammate reports into a single priority-resolved `active_enemies`
+        set; both the selector and decision logic consume that set, so
+        they can never disagree about who the threat is.
+        """
+        obs["shared_enemies"] = shared_enemies
+        obs["active_enemies"] = self.perception.compute_active_enemies(
+            obs["visible_enemies"], shared_enemies,
+        )
 
     def decide(self, obs: dict) -> str:
         assert obs["agent_id"] == self.agent_id
         assert obs["team"] == self.team
 
-        direct = obs["visible_enemies"]
-        shared = obs.get("shared_enemies", tuple())
-
-        # Strict priority: direct sight > teammate report > memory.
-        # Teammate info is at most one step old (synchronous, single-hop)
-        # so when we use it we also refresh memory — this guarantees the
-        # agent's fallback memory never gets older than the freshest signal
-        # the team has been able to provide.
-        if direct:
-            active = direct
+        # `active_enemies` was populated by this agent's own
+        # prepare_observation earlier in the step (strict priority:
+        # direct sight > teammate report > empty). When non-empty, refresh
+        # memory from it so the fallback memory is never older than the
+        # freshest signal the team produced.
+        active = obs["active_enemies"]
+        if active:
             vis = Perception.update_last_seen_enemy(
-                obs["ego_x"], obs["ego_y"], self.team, direct, self.rng,
+                obs["ego_x"], obs["ego_y"], self.team, active, self.rng,
             )
             if vis is not None:
                 self.last_seen_enemy = vis
-        elif shared:
-            active = shared
-            vis = Perception.update_last_seen_enemy(
-                obs["ego_x"], obs["ego_y"], self.team, shared, self.rng,
-            )
-            if vis is not None:
-                self.last_seen_enemy = vis
-        else:
-            active = tuple()
 
-        decision_obs = dict(obs)
-        decision_obs["active_enemies"] = active
-        action, clear_memory = self.decision.choose_action(decision_obs, self.last_seen_enemy)
+        action, clear_memory = self.decision.choose_action(obs, self.last_seen_enemy)
         if clear_memory:
             self.last_seen_enemy = None
         return action

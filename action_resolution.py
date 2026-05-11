@@ -7,7 +7,12 @@ import agent_utils as au
 from environment import Environment
 
 
-def _target_cell(env: Environment, agent_id: int, action: str) -> Tuple[int, int]:
+def _target_cell(
+    env: Environment,
+    agent_id: int,
+    action: str,
+    move_intentions: Dict[int, str],
+) -> Tuple[int, int]:
     body = env.agent_bodies[agent_id]
     if not body.alive:
         return (body.x, body.y)
@@ -17,8 +22,75 @@ def _target_cell(env: Environment, agent_id: int, action: str) -> Tuple[int, int
         return (body.x, body.y)
     if env.is_wall(tx, ty):
         return (body.x, body.y)
+
+    # Agent occupancy of the target cell. Two rules to encode:
+    #   1. Same-team agents never share a cell. If a teammate is staying
+    #      here this step (literal STAY, or PICKUP / DROP — neither of
+    #      which appears in `move_intentions` and so defaults to STAY),
+    #      we deny the entry now. If the teammate is moving away we
+    #      leave the decision to the same-team `forced_stay` propagation
+    #      later in resolve_actions, which already cascades blocks if
+    #      the teammate ends up stuck.
+    #   2. The only legal cross-team co-location is a predator stepping
+    #      onto a prey cell to capture. Prey moving onto a predator is
+    #      always rejected.
+    for ab in env.agent_bodies.values():
+        if not ab.alive or ab.agent_id == agent_id:
+            continue
+        if ab.x != tx or ab.y != ty:
+            continue
+        if ab.team == body.team:
+            ab_act = move_intentions.get(ab.agent_id, au.STAY)
+            ddx, ddy = au.ACTION_DELTA[ab_act]
+            if ddx == 0 and ddy == 0:
+                return (body.x, body.y)
+            # Teammate is moving away — do not block on the agent alone.
+            # Fall through to the obstacle/simultaneity check below: if
+            # there is an unheld obstacle co-located with the leaving
+            # teammate (e.g. they dropped last step and are now fleeing),
+            # `cell_stays_occupied` will be False and the obstacle will
+            # re-assert as a wall, correctly denying the entry. With no
+            # obstacle the entrant moves into the vacated cell, and any
+            # cascading block from a failed teammate move is picked up
+            # later by the same-team `forced_stay` propagation in
+            # resolve_actions.
+        else:
+            if body.team == au.TEAM_PREY:
+                return (body.x, body.y)
+            # Predator entering an enemy cell: allowed (capture). The
+            # obstacle/simultaneity check below still applies — if the
+            # prey is leaving the cell the same step, the cell reverts
+            # to obstacle-as-wall and entry is denied there.
+
     for obstacle in env.obstacles.values():
         if obstacle.held_by is None and obstacle.x == tx and obstacle.y == ty:
+            # In owner-passable lock mode, members of the team that owns the
+            # obstacle can walk through it; in the default symmetric mode
+            # obstacles always block movement.
+            if env.lock_mode == "owner-passable" and obstacle.locked_team == body.team:
+                continue
+            # The cell is treated as enterable (capture-by-stepping-in
+            # works) only when at least one live agent at the cell is
+            # *staying* this step. An occupant whose move intention has a
+            # non-zero delta is leaving — by the time this step resolves
+            # the obstacle would be alone on the cell and back to acting
+            # as a wall, so we deny the move now rather than letting the
+            # mover land on an enemy-locked obstacle.
+            # Pickup/drop actions don't appear in `move_intentions` (they
+            # were resolved earlier in resolve_actions and don't change
+            # the agent's cell), so `.get(..., au.STAY)` correctly treats
+            # those occupants as staying.
+            cell_stays_occupied = False
+            for ab in env.agent_bodies.values():
+                if not (ab.alive and ab.x == tx and ab.y == ty):
+                    continue
+                ab_act = move_intentions.get(ab.agent_id, au.STAY)
+                ddx, ddy = au.ACTION_DELTA[ab_act]
+                if ddx == 0 and ddy == 0:
+                    cell_stays_occupied = True
+                    break
+            if cell_stays_occupied:
+                continue
             return (body.x, body.y)
     return (tx, ty)
 
@@ -43,7 +115,7 @@ def resolve_actions(
 
     targets: Dict[int, Tuple[int, int]] = {}
     for aid in move_intentions:
-        targets[aid] = _target_cell(env, aid, move_intentions[aid])
+        targets[aid] = _target_cell(env, aid, move_intentions[aid], move_intentions)
 
     # Agents that perform PICKUP/DROP (or STAY) do not participate in
     # move-collision resolution; they remain at their current cells.

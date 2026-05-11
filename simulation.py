@@ -6,6 +6,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 import agent_utils as au
 from action_resolution import resolve_actions
 from agent import Agent, build_agents_for_env
+from decision_making import select_team_roles
 from environment import Environment
 from observation_definition import build_observation
 from reward_attribution import attribute_rewards
@@ -115,6 +116,7 @@ class SimulationConfig:
         self.num_walls: int = 0
         self.wall_size: int = 3
         self.enable_comms: bool = False
+        self.lock_mode: str = "symmetric"
 
 
 def copy_config(base: SimulationConfig, **overrides) -> SimulationConfig:
@@ -132,6 +134,7 @@ def copy_config(base: SimulationConfig, **overrides) -> SimulationConfig:
     c.num_walls = base.num_walls
     c.wall_size = base.wall_size
     c.enable_comms = base.enable_comms
+    c.lock_mode = base.lock_mode
     for k, v in overrides.items():
         setattr(c, k, v)
     return c
@@ -168,7 +171,7 @@ class SimulationState:
                 existing_walls=walls,
             )
 
-        self.env = Environment(config.width, config.height, walls)
+        self.env = Environment(config.width, config.height, walls, lock_mode=config.lock_mode)
         self.agents: List[Agent] = []
         self.step_index = 0
         self.outcome = au.OUTCOME_ONGOING
@@ -218,15 +221,43 @@ class SimulationState:
         else:
             shared_enemies = {aid: tuple() for aid in raw_obs}
 
+        # Phase 2b: each agent fuses its direct sightings with the
+        # teammate reports addressed to it, producing the
+        # priority-resolved `active_enemies` set on its own observation.
+        # The fusion lives on the Agent (delegated to its Perception) so
+        # that the simulation only orchestrates — it doesn't decide what
+        # the agent "knows".
+        agents_by_id = {a.agent_id: a for a in self.agents}
+        for aid, obs in raw_obs.items():
+            agents_by_id[aid].prepare_observation(obs, shared_enemies[aid])
+
+        # Phase 2c: per-team role assignment. The selector reads the
+        # comms-augmented obs and the agent's previous role_target (for
+        # stickiness), and writes the new role + role_target back onto
+        # each Agent. We then thread role and role_target into obs so the
+        # individual decision logic can dispatch on them.
+        for team in (au.TEAM_PREDATOR, au.TEAM_PREY):
+            team_ids = [
+                aid for aid, ob in raw_obs.items() if ob["team"] == team
+            ]
+            assignments = select_team_roles(
+                team, team_ids, raw_obs, agents_by_id, self.env,
+            )
+            for aid, (role, target) in assignments.items():
+                a = agents_by_id[aid]
+                a.role = role
+                a.role_target = target
+
         # Phase 3: agents decide using direct sightings, then teammate
-        # reports, then their own memory.
+        # reports, then their own memory — now within their assigned role.
         intentions: Dict[int, str] = {}
         for agent in self.agents:
             body = self.env.agent_bodies[agent.agent_id]
             if not body.alive:
                 continue
             obs = dict(raw_obs[agent.agent_id])
-            obs["shared_enemies"] = shared_enemies[agent.agent_id]
+            obs["role"] = agent.role
+            obs["role_target"] = agent.role_target
             intentions[agent.agent_id] = agent.decide(obs)
 
         resolve_actions(self.env, intentions, self.rng)

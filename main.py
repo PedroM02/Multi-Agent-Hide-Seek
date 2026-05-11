@@ -33,6 +33,7 @@ def main() -> None:
     parser.add_argument("--wall-size", type=int, default=2, dest="wall_size", help="Length (in cells) of each randomly generated wall segment.",)
     parser.add_argument("--obstacles", type=int, default=0, help="Number of pickable obstacle items (0 = none; default). Set > 0 to enable.",)
     parser.add_argument("--comms", action="store_true", help="Enable team communications (opt-in). Each agent broadcasts directly-visible enemies to teammates inside its vision radius; receivers fall back from direct sight to teammate reports to memory.",)
+    parser.add_argument("--lock-mode", choices=["symmetric", "owner-passable"], default="symmetric", dest="lock_mode", help="Obstacle locking semantics. 'symmetric' (default): dropped obstacles block both teams; only the owning team can re-pickup. 'owner-passable': the owning team can walk through its own locked obstacles while the enemy team is still blocked.",)
     args = parser.parse_args()
 
     config = SimulationConfig()
@@ -48,6 +49,7 @@ def main() -> None:
     config.wall_size = args.wall_size
     config.num_obstacles = args.obstacles
     config.enable_comms = args.comms
+    config.lock_mode = args.lock_mode
 
     if args.gui:
         from visualization import run_visualization

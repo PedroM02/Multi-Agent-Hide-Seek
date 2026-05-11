@@ -6,7 +6,7 @@ import pygame
 
 import agent_utils as au
 from environment import Environment
-from simulation import SimulationConfig, SimulationState
+from simulation import BatchSummary, SimulationConfig, SimulationState
 
 
 CELL = 36
@@ -17,7 +17,14 @@ GRID_WALL = (35, 35, 40)
 GRID_EMPTY = (210, 210, 215)
 GRID_PRED = (110, 55, 180)
 GRID_PREY = (55, 160, 75)
-GRID_OBSTACLE = (220, 180, 40)
+# Obstacle colours: unclaimed is neutral light grey; locked obstacles are
+# tinted toward the owning team's colour so the strategic state is visible
+# at a glance.
+OBSTACLE_UNCLAIMED = (150, 150, 155)
+OBSTACLE_PRED_LOCKED = (160, 110, 200)
+OBSTACLE_PREY_LOCKED = (130, 190, 140)
+CARRY_RING = (15, 15, 20)
+ROLE_LETTER_COLOR = (245, 245, 245)
 
 
 def _blit_legend(surface: pygame.Surface, font: pygame.font.Font, x: int, y: int) -> int:
@@ -32,37 +39,69 @@ def _blit_legend(surface: pygame.Surface, font: pygame.font.Font, x: int, y: int
     return x2 + sw + 6 + font.size("Prey")[0]
 
 
+def _obstacle_color(locked_team: str | None) -> tuple[int, int, int]:
+    if locked_team == au.TEAM_PREDATOR:
+        return OBSTACLE_PRED_LOCKED
+    if locked_team == au.TEAM_PREY:
+        return OBSTACLE_PREY_LOCKED
+    return OBSTACLE_UNCLAIMED
+
+
 def _draw_grid(
     surface: pygame.Surface,
     env: Environment,
+    agents,
     font: pygame.font.Font,
     status: str,
     vision_radius_predator: int,
-    vision_radius_prey: int
+    vision_radius_prey: int,
 ) -> None:
     surface.fill(HUD_COLOR)
     grid_w = env.width * CELL
     grid_h = env.height * CELL
     grid_surf = pygame.Surface((grid_w, grid_h))
     grid_surf.fill(GRID_EMPTY)
+
     for x in range(env.width):
         for y in range(env.height):
             rect = pygame.Rect(x * CELL, y * CELL, CELL, CELL)
             if env.is_wall(x, y):
                 pygame.draw.rect(grid_surf, GRID_WALL, rect)
             pygame.draw.rect(grid_surf, (0, 0, 0), rect, 1)
+
+    agent_by_id = {a.agent_id: a for a in agents}
+
     for b in env.agent_bodies.values():
         if not b.alive:
             continue
         rect = pygame.Rect(b.x * CELL + 2, b.y * CELL + 2, CELL - 4, CELL - 4)
         col = GRID_PRED if b.team == au.TEAM_PREDATOR else GRID_PREY
         pygame.draw.rect(grid_surf, col, rect, border_radius=4)
+
+        a = agent_by_id.get(b.agent_id)
+        if a is not None:
+            letter = au.ROLE_LETTER.get(a.role, "?")
+            label = font.render(letter, True, ROLE_LETTER_COLOR)
+            lw, lh = label.get_size()
+            cx = b.x * CELL + CELL // 2
+            cy = b.y * CELL + CELL // 2
+            grid_surf.blit(label, (cx - lw // 2, cy - lh // 2))
+
+    # Obstacles. Unheld obstacles are coloured by lock state and drawn on
+    # top of any agent that happens to share the cell so the shelter state
+    # stays visible. Held obstacles are shown as a black ring on the carrier.
     for item in env.obstacles.values():
         if item.held_by is not None:
+            carrier = env.agent_bodies.get(item.held_by)
+            if carrier is not None and carrier.alive:
+                cx = carrier.x * CELL + CELL // 2
+                cy = carrier.y * CELL + CELL // 2
+                pygame.draw.circle(grid_surf, CARRY_RING, (cx, cy), CELL // 4, 2)
             continue
         cx = item.x * CELL + CELL // 2
         cy = item.y * CELL + CELL // 2
-        pygame.draw.circle(grid_surf, GRID_OBSTACLE, (cx, cy), CELL // 5)   
+        pygame.draw.circle(grid_surf, _obstacle_color(item.locked_team), (cx, cy), CELL // 5)
+
     grid_x = max(0, (surface.get_width() - grid_w) // 2)
     surface.blit(grid_surf, (grid_x, MARGIN_TOP))
 
@@ -70,7 +109,7 @@ def _draw_grid(
     _blit_legend(surface, font, PAD_X, 34)
     hint_1 = font.render(
         f"Vision: Chebyshev predator r={vision_radius_predator} and prey r={vision_radius_prey} (square side {2 * vision_radius_predator + 1})  |  "
-        "Chase: visible enemy if any, else last seen",
+        "Obstacles: grey=unclaimed, tinted=team-locked, black ring=carrier",
         True,
         (170, 170, 180),
     )
@@ -97,7 +136,7 @@ def run_visualization(config: SimulationConfig, num_runs: int = 1) -> None:
     )
     hint_text_1 = (
         f"Vision: Chebyshev Predator Radius={config.vision_radius_predator} and Prey Radius={config.vision_radius_prey} (square side {2 * config.vision_radius_predator + 1})  |  "
-        "Chase: visible enemy if any, else last seen"
+        "Obstacles: grey=unclaimed, tinted=team-locked, black ring=carrier"
     )
     hint_text_2 = "Next timestep: space/right   Auto Run: a   Reset Run: r   Next Run: n   Quit: esc"
     min_header_w = max(font.size(status_sample)[0], font.size(hint_text_1)[0], font.size(hint_text_2)[0]) + PAD_X * 2
@@ -110,6 +149,33 @@ def run_visualization(config: SimulationConfig, num_runs: int = 1) -> None:
     step_ms = 180
     pygame.time.set_timer(pygame.USEREVENT, 0)
 
+    summary = BatchSummary()
+    logged_runs: set[int] = set()
+
+    def log_current_run_if_done() -> None:
+        """Record the current run into the batch summary once it finishes.
+
+        Called both when advancing to the next run and on quit. The
+        logged_runs guard means a reset of an already-counted run does
+        not double-count or change the recorded outcome.
+        """
+        if sim.outcome == au.OUTCOME_ONGOING:
+            return
+        if run_index in logged_runs:
+            return
+        logged_runs.add(run_index)
+        summary.runs += 1
+        summary.total_steps += sim.step_index
+        if sim.outcome == au.OUTCOME_PREDATORS_WIN:
+            summary.predator_wins += 1
+        elif sim.outcome == au.OUTCOME_PREY_WIN:
+            summary.prey_timeout_wins += 1
+        print(
+            f"run={run_index + 1}/{total_runs}  seed={run_seed}  "
+            f"outcome={sim.outcome}  steps={sim.step_index}",
+            flush=True,
+        )
+
     def load_run(idx: int) -> None:
         nonlocal run_index, run_seed, rng, sim
         run_index = idx
@@ -120,6 +186,7 @@ def run_visualization(config: SimulationConfig, num_runs: int = 1) -> None:
     def try_advance_run() -> bool:
         if run_index + 1 >= total_runs:
             return False
+        log_current_run_if_done()
         load_run(run_index + 1)
         return True
 
@@ -137,6 +204,8 @@ def run_visualization(config: SimulationConfig, num_runs: int = 1) -> None:
                 elif event.key in (pygame.K_SPACE, pygame.K_RIGHT):
                     if sim.outcome == au.OUTCOME_ONGOING:
                         sim.step_once()
+                        if sim.outcome != au.OUTCOME_ONGOING:
+                            log_current_run_if_done()
                 elif event.key == pygame.K_a:
                     auto = not auto
                     pygame.time.set_timer(pygame.USEREVENT, step_ms if auto else 0)
@@ -152,12 +221,35 @@ def run_visualization(config: SimulationConfig, num_runs: int = 1) -> None:
             elif event.type == pygame.USEREVENT and auto:
                 if sim.outcome == au.OUTCOME_ONGOING:
                     sim.step_once()
+                    if sim.outcome != au.OUTCOME_ONGOING:
+                        log_current_run_if_done()
                 elif not try_advance_run():
                     auto = False
                     pygame.time.set_timer(pygame.USEREVENT, 0)
 
-        _draw_grid(screen, sim.env, font, status_text(), config.vision_radius_predator, config.vision_radius_prey)
+        _draw_grid(screen, sim.env, sim.agents, font, status_text(), config.vision_radius_predator, config.vision_radius_prey)
         pygame.display.flip()
         clock.tick(60)
 
+    log_current_run_if_done()
     pygame.quit()
+
+    # A "natural" end is one where every seeded run actually finished.
+    # Anything else (closing the window mid-run, leaving early after some
+    # but not all runs) is an abort and gets reported as such so the
+    # printed summary doesn't silently misrepresent the experiment.
+    completed_cleanly = summary.runs >= total_runs
+    if not completed_cleanly:
+        print(
+            f"simulation aborted ({summary.runs}/{total_runs} runs completed)",
+            flush=True,
+        )
+
+    if summary.runs > 0:
+        mean_steps = summary.total_steps / summary.runs
+        print(
+            f"runs={summary.runs}  predator_wins={summary.predator_wins}  "
+            f"prey_timeout_wins={summary.prey_timeout_wins}",
+            flush=True,
+        )
+        print(f"mean_steps={mean_steps:.2f}", flush=True)

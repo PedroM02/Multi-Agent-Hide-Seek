@@ -17,17 +17,25 @@ class Obstacle:
         self.x = x
         self.y = y
         self.held_by = None
+        # None while unclaimed (spawned that way); set to the dropper's team
+        # when first dropped. Locked obstacles can only be re-picked up by
+        # the owning team. Movement blocking depends on the environment's
+        # lock_mode (see Environment.__init__).
+        self.locked_team = None
 
 class Environment:
     """Rectangle of dimensions (width, height) with optional obstacle cells."""
 
-    def __init__(self, width, height, walls):
+    def __init__(self, width, height, walls, lock_mode="symmetric"):
 
         # Initialize basic environment with walls
         if width < 1 or height < 1:
             raise ValueError("Width and Height must be larger than 0")
+        if lock_mode not in ("symmetric", "owner-passable"):
+            raise ValueError("lock_mode must be 'symmetric' or 'owner-passable'")
         self.width = width
         self.height = height
+        self.lock_mode = lock_mode
         self.wall_cells = set()
         self.agent_bodies = {}
         self.obstacles = {}
@@ -120,6 +128,9 @@ class Environment:
         for obstacle in self.obstacles.values():
             if obstacle.held_by is not None:
                 continue
+            # Enemy-locked obstacles cannot be picked up.
+            if obstacle.locked_team is not None and obstacle.locked_team != agent_body.team:
+                continue
             if abs(obstacle.x - agent_body.x) <= 1 and abs(obstacle.y - agent_body.y) <= 1 and (obstacle.x != agent_body.x or obstacle.y != agent_body.y):
                 obstacle.held_by = agent_id
                 return
@@ -131,6 +142,7 @@ class Environment:
                 obstacle.held_by = None
                 obstacle.x = agent_body.x
                 obstacle.y = agent_body.y
+                obstacle.locked_team = agent_body.team
                 return
 
     def alive_bodies(self):
@@ -157,10 +169,13 @@ class Environment:
                 continue
             output_actions.append(action)
         
-        # Pick obstacle up if an unclaimed obstacle is here
+        # Pickup is legal if there's any unheld obstacle adjacent that this
+        # team is allowed to take (i.e. unclaimed or own-team-locked).
         if any(
             # Obstacle is not held by any agent
-            obstacle.held_by is None 
+            obstacle.held_by is None
+            # Obstacle is not enemy-locked
+            and (obstacle.locked_team is None or obstacle.locked_team == agent_body.team)
             # Obstacle is within 1 cell of the agent
             and abs(obstacle.x - agent_body.x) <= 1 and abs(obstacle.y - agent_body.y) <= 1
             # Obstacle is not in the same cell as the agent
