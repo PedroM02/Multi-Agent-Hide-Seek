@@ -88,96 +88,121 @@ After actions resolve, any cell that contains at least one alive
 that cell as captured. "Active" here means `stun_remaining == 0` —
 stunned predators (see "Prey-defend (cooperative knockout)" below)
 cannot capture, so a prey co-located only with stunned predators
-survives the step. The episode ends the moment every prey is dead
-(predators win) or when the timestep budget elapses (prey wins on
-timeout).
+survives the step. The episode ends the moment one of three
+conditions becomes true:
+
+- All prey are dead → **predators win**.
+- All predators are dead (only reachable with `--prey-defend kill`)
+  → **prey win**.
+- The timestep budget elapses with at least one prey alive
+  → **prey win** (timeout); otherwise predators win.
+
+The "all-prey-dead" check is evaluated first, so if the last prey
+and the last predator both die on the same step the run is logged
+as a predator win — the existing convention is preserved when the
+new kill mode adds a second extinction path.
 
 ---
 
 ## Prey-defend (cooperative knockout)
 
-Opt-in via `--prey-defend`. Off by default, in which case nothing in
-the stun system ever fires and the rest of the rules are unchanged.
+Opt-in via `--prey-defend {stun,kill}`. Omit the flag for the
+default behaviour, in which case the knockout system never fires
+and the rest of the rules are unchanged.
 
-When enabled, groups of Chebyshev-adjacent prey can temporarily stun
+When enabled, groups of Chebyshev-adjacent prey can defeat
 predators that they collectively sandwich. The intent is to give
 prey a cooperative tool that pays off the cohesion bias in
 `_flee` / `_wander_with_cohesion`: pairs and packs become a real
 defensive asset and not just less-scattered targets.
 
-### Mechanic
+The two modes share **all** geometric and capacity rules; they
+differ only in what happens to a defeated predator:
 
-1. **Groups.** Alive prey are partitioned by connected components on
-   the prey-prey Chebyshev-1 adjacency graph. So a chain A–B–C
-   (each pair Cheb-1 of the next) is one group of size 3 even when
-   A and C are Cheb-2 apart.
-2. **Stunnable predator.** A predator P is stunnable by a group G
-   iff P is alive, is not already stunned (`stun_remaining == 0`),
-   has not been stunned by an earlier group this same step, and is
+| Mode | Effect on defeated predator | Episode termination consequence |
+|------|------------------------------|----------------------------------|
+| `stun` | `stun_remaining` set to `stun_duration` (= 3 steps). Predator locked to STAY for the window; capture pass skips it. Comes back online after the timer reaches 0. | None directly — predators recover. |
+| `kill` | `alive` set to `False`. Predator is removed from the run permanently; resolver and capture pass automatically skip it (they already iterate over `alive_bodies` only). | When all predators are dead the episode ends with a prey win on the spot. |
+
+### Shared mechanic
+
+1. **Groups.** Alive prey are partitioned by connected components
+   on the prey-prey Chebyshev-1 adjacency graph. So a chain
+   A–B–C (each pair Cheb-1 of the next) is one group of size 3
+   even when A and C are Cheb-2 apart.
+2. **Defeatable predator.** A predator P is defeatable by a group
+   G iff P is alive, is not already stunned
+   (`stun_remaining == 0`; relevant only in `stun` mode), has not
+   been defeated by an earlier group this same step, and is
    Chebyshev-1 of at least 2 distinct members of G. This is the
    natural generalisation of the n = 2 "Cheb-1 of both prey" rule.
-3. **Cap.** A group of size n can stun at most `n - 1` predators
-   per step. When there are more stunnable candidates than the
+3. **Cap.** A group of size n can defeat at most `n - 1`
+   predators per step. When there are more candidates than the
    cap, the lowest predator agent id wins (fully deterministic —
    no RNG flows through the knockout pass at all).
-4. **Forced STAY.** For every newly stunned predator, the prey from
-   the group that are Cheb-1 of that predator (the "sandwichers")
-   have their pending action overridden to STAY for this step.
-   Other group members can move normally — the freeze is the price
-   paid by the prey actually doing the sandwiching, not by the
-   whole pack.
-5. **Stun duration.** `stun_duration = 3` steps total, including
-   the step the stun was applied. While `stun_remaining > 0` the
-   predator's action is overridden to STAY at the start of every
-   step (`Phase 4a` of `step_once`) and the capture pass skips it,
-   so a stunned predator standing on a prey cell does *not*
-   capture. Decrement happens at end of step; the predator is back
-   online on the 4th step after the stun.
-6. **No post-stun immunity.** As soon as `stun_remaining` reaches 0
-   the predator is a fresh candidate for the next group's
-   knockout, if the geometry still holds.
+4. **Forced STAY.** For every newly defeated predator, the prey
+   from the group that are Cheb-1 of that predator (the
+   "sandwichers") have their pending action overridden to STAY
+   for this step. Other group members can move normally — the
+   freeze is the price paid by the prey actually doing the
+   sandwiching, not by the whole pack.
+5. **No post-stun immunity** (`stun` mode). As soon as
+   `stun_remaining` reaches 0 the predator is a fresh candidate
+   for the next group's knockout, if the geometry still holds.
 
 ### Pipeline ordering
 
-`SimulationState.step_once` runs the stun system between agent
+`SimulationState.step_once` runs the knockout system between agent
 decisions and action resolution:
 
 1. Phase 1–3: observations → comms → role assignment → `decide`,
-   exactly as without `--prey-defend`. Stunned predators still call
-   `decide` so their `last_seen_enemy` and perception bookkeeping
-   stay consistent across the stun window; only the *action* is
-   overridden.
-2. **Phase 4a** (only when `prey_defend`): every predator with
-   `stun_remaining > 0` has its intention overridden to STAY.
-3. **Phase 4b** (only when `prey_defend`):
-   `SimulationState._resolve_knockouts` builds groups, picks
-   stunnable predators per the rules above, writes
-   `stun_remaining = stun_duration` onto each newly stunned
-   predator, and overrides sandwicher prey to STAY.
+   exactly as without `--prey-defend`. Stunned predators still
+   call `decide` so their `last_seen_enemy` and perception
+   bookkeeping stay consistent across the stun window; only the
+   *action* is overridden.
+2. **Phase 4a** (only when `prey_defend == "stun"`): every predator
+   with `stun_remaining > 0` has its intention overridden to STAY.
+3. **Phase 4b** (only when `prey_defend` is set):
+   `SimulationState._resolve_knockouts(intentions, mode)` builds
+   groups, picks defeatable predators per the rules above, applies
+   the mode-specific effect (`stun_remaining = stun_duration` or
+   `alive = False`), and overrides sandwicher prey to STAY.
 4. Resolver and capture pass run as usual; the capture pass reads
-   `stun_remaining` directly (no extra plumbing needed).
-5. **Phase 5** (only when `prey_defend`): decrement every positive
-   `stun_remaining` by 1.
+   `stun_remaining` and `alive` directly (no extra plumbing
+   needed — `apply_captures` already iterates `alive_bodies`).
+5. **Phase 5** (only when `prey_defend == "stun"`): decrement
+   every positive `stun_remaining` by 1.
+6. **Termination checks.** Prey-extinction → predators win;
+   else predator-extinction (only reachable in `kill` mode)
+   → prey win; else timeout.
 
-This ordering means stunning is *prophylactic* — a predator that
+This ordering means defeat is *prophylactic* — a predator that
 was going to capture this very step gets its action overwritten
-before the resolver runs, so the prey survives.
+(stun) or its body removed (kill) before the resolver runs, so
+the prey survives.
 
 ### Design notes
 
-- Prey observations do not change. Prey still see stunned predators
-  as enemies; their flee logic still treats them as threats. This is
-  intentional: a stunned predator's stun window is finite, so prey
-  keeping distance is the right move. It also means we don't need
-  to plumb a new observation field, and `Perception` is unchanged.
-- The mechanic interacts predictably with multi-predator games: an
-  unstunned predator can still capture a sandwicher prey on the same
-  step that prey is forced to STAY. The cap rule (n - 1, not n)
-  bakes this trade-off in by design.
-- Determinism: the knockout pass is RNG-free. Groups are processed
-  in ascending min-id order; within a group, predator candidates
-  are sorted by id. Replays with identical seeds + flags produce
-  identical traces.
+- Prey observations do not change. Prey still see stunned
+  predators as enemies; their flee logic still treats them as
+  threats. This is intentional: a stunned predator's stun window
+  is finite, so prey keeping distance is the right move. It also
+  means we don't need to plumb a new observation field, and
+  `Perception` is unchanged. In `kill` mode dead predators
+  naturally drop out of `visible_enemies` (the observation loop
+  already filters on `alive`).
+- The mechanic interacts predictably with multi-predator games:
+  an unstunned/uninvolved predator can still capture a
+  sandwicher prey on the same step that prey is forced to STAY.
+  The cap rule (n - 1, not n) bakes this trade-off in by design,
+  and applies symmetrically in both modes.
+- Reward attribution is unchanged. Defeated predators do not
+  generate any new reward signal — `attribute_rewards` still
+  only tracks per-step predator captures.
+- Determinism: the knockout pass is RNG-free in both modes.
+  Groups are processed in ascending min-id order; within a group,
+  predator candidates are sorted by id. Replays with identical
+  seeds + flags produce identical traces.
 
 ---
 
@@ -225,25 +250,32 @@ The per-step pipeline lives in [`simulation.py`](simulation.py)
    `last_seen_enemy`. `choose_action` currently dispatches on team
    alone (predators chase, prey flee). The chosen action goes back to
    action resolution.
-6. **Stun system** (optional, opt-in via `--prey-defend`). Sits
-   between decisions and the resolver. Two phases:
-   - 4a: predators with `stun_remaining > 0` from a previous step
-     have their action overridden to STAY.
+6. **Knockout system** (optional, opt-in via
+   `--prey-defend {stun,kill}`). Sits between decisions and the
+   resolver. Two phases:
+   - 4a (`stun` mode only): predators with `stun_remaining > 0`
+     from a previous step have their action overridden to STAY.
    - 4b: `_resolve_knockouts` runs the cooperative-knockout pass,
-     stunning up to `n - 1` predators per prey group and forcing
-     the sandwicher prey to STAY. See "Prey-defend (cooperative
-     knockout)" above for the full rules.
-7. **Resolution, capture, and stun decrement.** Action resolver runs
-   over the (possibly overridden) intentions; the capture pass skips
-   stunned predators; finally positive `stun_remaining` values are
-   decremented by 1.
+     defeating up to `n - 1` predators per prey group and forcing
+     the sandwicher prey to STAY. The defeat effect is mode-
+     specific: `stun` writes `stun_remaining`, `kill` flips
+     `alive` to False. See "Prey-defend (cooperative knockout)"
+     above for the full rules.
+7. **Resolution, capture, and stun decrement.** Action resolver
+   runs over the (possibly overridden) intentions; the capture
+   pass skips stunned and dead predators (both branches handled
+   by `apply_captures` reading `stun_remaining` and `alive`);
+   finally positive `stun_remaining` values are decremented by 1
+   (`stun` mode only). The post-step termination check then adds
+   a "no predators left → prey win" path on top of the existing
+   "no prey left → predators win" and "timeout" rules.
 
-This ordering makes the contract simple: the selector and the agent
-both consume the same `active_enemies` set, so they cannot disagree
-about who the threat is or where it is. The stun system is purely
-additive — with `--prey-defend` off, steps 6 and the stun-aware part
-of step 7 collapse to no-ops and the rest of the pipeline is
-unchanged.
+This ordering makes the contract simple: the selector and the
+agent both consume the same `active_enemies` set, so they cannot
+disagree about who the threat is or where it is. The knockout
+system is purely additive — when `--prey-defend` is omitted, step
+6 and the stun-aware parts of step 7 collapse to no-ops and the
+rest of the pipeline is unchanged.
 
 ---
 
@@ -377,7 +409,8 @@ identical to the prior behaviour.
 | Element | Meaning |
 |---------|---------|
 | Purple rounded rect | Predator body |
-| Dimmed (~50%) purple rounded rect | Stunned predator (active only with `--prey-defend`; cannot move or capture for `stun_duration` steps) |
+| Dimmed (~50%) purple rounded rect | Stunned predator (only seen with `--prey-defend stun`; cannot move or capture for `stun_duration` steps) |
+| (no rendering) | Killed predator (only with `--prey-defend kill`); the body is dropped from rendering the same way captured prey are |
 | Green rounded rect | Prey body |
 | Single white letter inside a body | Current role (`C` chaser, `F` flee) — also dimmed when the body is stunned |
 | Dark grey filled cell | Wall |
@@ -416,7 +449,7 @@ All flags are kebab-case; full list available via `python main.py --help`.
 | `--walls N` | 2 | Random wall segments to generate |
 | `--wall-size N` | 2 | Length of each generated wall segment |
 | `--comms` | off | Enable speaker-centric, single-hop team communication |
-| `--prey-defend` | off | Enable the cooperative-knockout mechanic: groups of Cheb-1 prey can stun up to `n-1` adjacent predators for 3 steps (sandwicher prey are forced to STAY that step). See "Prey-defend (cooperative knockout)" above. |
+| `--prey-defend {stun,kill}` | off | Enable the cooperative-knockout mechanic. Groups of Cheb-1 prey defeat up to `n-1` sandwiched predators per step (sandwicher prey are forced to STAY that step). `stun` freezes the predator for 3 steps; `kill` removes it from the run and ends the episode early once every predator is gone. See "Prey-defend (cooperative knockout)" above. |
 
 Determinism: a given `(seed, run index, all other flags)` reproduces
 exactly the same episode trace, because every stochastic choice flows

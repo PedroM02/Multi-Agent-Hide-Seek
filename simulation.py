@@ -117,10 +117,15 @@ class SimulationConfig:
         self.wall_size: int = 3
         self.enable_comms: bool = False
         # Cooperative-knockout (prey-defend) mechanic. When enabled,
-        # groups of Chebyshev-adjacent prey can stun predators that
-        # are Chebyshev-1 of >=2 group members. See
-        # `SimulationState._resolve_knockouts` for the full rules.
-        self.prey_defend: bool = False
+        # groups of Chebyshev-adjacent prey can defeat predators that
+        # are Chebyshev-1 of >=2 group members. Two modes:
+        #   - None  : mechanic disabled (default).
+        #   - "stun": predators are stunned for `stun_duration` steps;
+        #             they recover and rejoin the chase.
+        #   - "kill": predators are removed from the run permanently;
+        #             when all predators are dead, prey win.
+        # See `SimulationState._resolve_knockouts` for the full rules.
+        self.prey_defend: Optional[str] = None
         self.stun_duration: int = 3
 
 
@@ -265,19 +270,24 @@ class SimulationState:
             obs["role_target"] = agent.role_target
             intentions[agent.agent_id] = agent.decide(obs)
 
-        # Phase 4: stun system (opt-in via --prey-defend). Two passes:
-        #   4a. Existing stuns: any predator with stun_remaining > 0
-        #       from a previous step is locked to STAY this step. We
-        #       still let it call decide() above so its perception
-        #       and memory bookkeeping stay consistent across the
-        #       window; only the action is overridden.
-        #   4b. Cooperative knockout: groups of Chebyshev-adjacent
-        #       prey stun up to n-1 active predators (see the method
-        #       docstring for the exact rules). Newly stunned
-        #       predators are locked to STAY and the "sandwicher"
-        #       prey (those at Cheb-1 of a stunned predator) are
-        #       also locked to STAY for this step.
-        if self.config.prey_defend:
+        # Phase 4: cooperative-knockout system (opt-in via
+        # --prey-defend). Up to two passes, both gated on the
+        # configured mode:
+        #   4a. Existing stuns (only in "stun" mode): any predator
+        #       with stun_remaining > 0 from a previous step is
+        #       locked to STAY this step. We still let it call
+        #       decide() above so its perception and memory
+        #       bookkeeping stay consistent across the window; only
+        #       the action is overridden.
+        #   4b. Knockout: groups of Chebyshev-adjacent prey defeat
+        #       up to n-1 unclaimed predators per group (see
+        #       _resolve_knockouts for the exact rules). In "stun"
+        #       mode each defeated predator gets a stun timer;
+        #       in "kill" mode it is marked dead. Either way the
+        #       predator's action is overridden to STAY and the
+        #       "sandwicher" prey are also locked to STAY for this
+        #       step.
+        if self.config.prey_defend == "stun":
             for body in self.env.agent_bodies.values():
                 if (
                     body.team == au.TEAM_PREDATOR
@@ -285,7 +295,8 @@ class SimulationState:
                     and body.stun_remaining > 0
                 ):
                     intentions[body.agent_id] = au.STAY
-            self._resolve_knockouts(intentions)
+        if self.config.prey_defend is not None:
+            self._resolve_knockouts(intentions, self.config.prey_defend)
 
         resolve_actions(self.env, intentions, self.rng)
         captured = self.env.apply_captures()
@@ -293,23 +304,35 @@ class SimulationState:
         for aid, r in rews.items():
             self.cumulative_rewards[aid] = self.cumulative_rewards.get(aid, 0.0) + r
 
-        # Phase 5: decrement stun timers at end of step. A stun of
-        # duration D applied on step T overrides the predator on
-        # steps T, T+1, ..., T+D-1 (D forced-STAY steps in total) and
-        # the predator is back online on step T+D. This is what
-        # decrementing after the action+capture passes gives us:
-        # stun_remaining is D at the start of step T (override
-        # applied, capture skipped, then decremented to D-1) and 0 at
-        # the start of step T+D.
-        if self.config.prey_defend:
+        # Phase 5: decrement stun timers at end of step ("stun" mode
+        # only; in "kill" mode no predator ever carries a timer). A
+        # stun of duration D applied on step T overrides the
+        # predator on steps T, T+1, ..., T+D-1 (D forced-STAY steps
+        # in total) and the predator is back online on step T+D.
+        # This is what decrementing after the action+capture passes
+        # gives us: stun_remaining is D at the start of step T
+        # (override applied, capture skipped, then decremented to
+        # D-1) and 0 at the start of step T+D.
+        if self.config.prey_defend == "stun":
             for body in self.env.agent_bodies.values():
                 if body.team == au.TEAM_PREDATOR and body.stun_remaining > 0:
                     body.stun_remaining -= 1
 
         self.step_index += 1
 
+        # Termination checks. Prey-extinction is checked first so
+        # that a same-step "last prey captured" outcome is recorded
+        # as a predator win even when --prey-defend kill has just
+        # eliminated the last predator (this matches the existing
+        # convention that all-prey-dead always means predator win).
+        # Predator-extinction is checked second and is only
+        # reachable in "kill" mode but is correct as a general
+        # rule, so it isn't gated.
         if not self.env.any_prey_alive():
             self.outcome = au.OUTCOME_PREDATORS_WIN
+            return False
+        if not self.env.any_predator_alive():
+            self.outcome = au.OUTCOME_PREY_WIN
             return False
         if self.step_index >= self.config.timesteps:
             if self.env.any_prey_alive():
@@ -319,7 +342,7 @@ class SimulationState:
             return False
         return True
 
-    def _resolve_knockouts(self, intentions: Dict[int, str]) -> None:
+    def _resolve_knockouts(self, intentions: Dict[int, str], mode: str) -> None:
         """Cooperative knockout pass for the prey-defend mechanic.
 
         Identifies groups of alive prey by connected components on
@@ -327,27 +350,35 @@ class SimulationState:
         size n >= 2:
 
         * Candidate predators are alive, not currently stunned
-          (stun_remaining == 0), not already stunned by an earlier
-          group this same step, and Chebyshev-1 of at least 2
-          distinct group members ("sandwich" condition, the natural
-          n>=2 generalisation of "Cheb-1 of both prey").
-        * Up to n - 1 candidates are stunned, picked in ascending
+          (stun_remaining == 0; relevant only in stun mode), not
+          already defeated by an earlier group this same step, and
+          Chebyshev-1 of at least 2 distinct group members
+          ("sandwich" condition, the natural n>=2 generalisation of
+          "Cheb-1 of both prey").
+        * Up to n - 1 candidates are defeated, picked in ascending
           predator agent id order (fully deterministic — no RNG
           flows through this pass).
-        * Each newly stunned predator has its `stun_remaining` set
-          to `cfg.stun_duration` and its pending intention forced
-          to STAY.
+        * The defeat effect depends on `mode`:
+            - "stun": predator's `stun_remaining` is set to
+              `cfg.stun_duration`; the predator is locked to STAY
+              this step and the capture pass will skip it for the
+              duration of the stun.
+            - "kill": predator's `alive` is set to False;
+              the predator is locked to STAY this step (cosmetic,
+              since the resolver and capture pass already skip
+              dead bodies) and stays dead for the rest of the run.
         * The "sandwichers" — prey from this group at Cheb-1 of any
-          newly stunned predator — are forced to STAY for this
-          step. Other group members are free to act normally.
+          defeated predator — are forced to STAY for this step.
+          Other group members are free to act normally.
 
         Groups are processed in ascending order of their lowest
         member's agent id, so when multiple groups could claim the
-        same predator the order is reproducible. Predators stunned
+        same predator the order is reproducible. Predators defeated
         by an earlier group are skipped by later groups (no double-
         counting against later groups' n-1 caps either: caps are
         per-group, candidates are per-group filtered).
         """
+        assert mode in ("stun", "kill"), f"unexpected prey_defend mode {mode!r}"
         alive_prey_by_id = {
             b.agent_id: b
             for b in self.env.agent_bodies.values()
@@ -395,7 +426,7 @@ class SimulationState:
             groups.append(comp)
         groups.sort(key=lambda g: g[0])
 
-        stunned_this_step: set[int] = set()
+        defeated_this_step: set[int] = set()
         pred_ids_sorted = sorted(alive_pred_by_id)
 
         for group in groups:
@@ -406,7 +437,7 @@ class SimulationState:
 
             candidates: List[int] = []
             for pid_pred in pred_ids_sorted:
-                if pid_pred in stunned_this_step:
+                if pid_pred in defeated_this_step:
                     continue
                 pb = alive_pred_by_id[pid_pred]
                 if pb.stun_remaining > 0:
@@ -425,9 +456,12 @@ class SimulationState:
                 continue
             chosen = candidates[:cap]
             for pred_id in chosen:
-                stunned_this_step.add(pred_id)
+                defeated_this_step.add(pred_id)
                 pb = alive_pred_by_id[pred_id]
-                pb.stun_remaining = self.config.stun_duration
+                if mode == "stun":
+                    pb.stun_remaining = self.config.stun_duration
+                else:  # mode == "kill"
+                    pb.alive = False
                 intentions[pred_id] = au.STAY
                 for prey_id in group:
                     pry = alive_prey_by_id[prey_id]
