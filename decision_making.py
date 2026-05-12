@@ -120,16 +120,41 @@ class DecisionMaking:
         if stale and ego_x == tx and ego_y == ty:
             return self._rng.choice(legal), True
 
-        # Avoid moves that close distance to any *other* predator in the
-        # active set; only the primary target governs flee direction.
+        # Current distances to all *non-primary* threats. The "safe"
+        # check below only fires on these — only the primary target
+        # governs the actual flee direction.
         current_other_dists: Dict[int, int] = {}
         for ex, ey, eid in active:
             if ex == tx and ey == ty:
                 continue
             current_other_dists[eid] = manhattan(ego_x, ego_y, ex, ey)
 
-        safe_actions: List[str] = []
-        for act in legal:
+        # Split STAY out of the legal set before computing the
+        # "safe" subset. STAY trivially never closes distance to anyone
+        # (zero delta), so treating it as just another safe action lets
+        # the prey freeze whenever every real cardinal looks unsafe —
+        # the primary predator then walks in for free. We treat STAY
+        # explicitly below instead.
+        cardinals = [a for a in legal if a != au.STAY]
+
+        # Suicide guard: drop any cardinal whose target cell is
+        # currently occupied by a known active enemy. `legal_actions`
+        # only checks bounds and walls, so a prey adjacent to a
+        # predator can otherwise have a move like DOWN→(predator cell)
+        # in its candidate set; the `safe_cardinals` filter happily
+        # accepts it (moves further from all *other* predators) and
+        # the scorer then prefers it to STAY on Manhattan-to-primary,
+        # producing a step-into-capture. The agent already sees the
+        # active enemies' positions in `obs`, so this guard uses no
+        # new information channel.
+        active_cells = {(ex, ey) for ex, ey, _ in active}
+        cardinals = [
+            act for act in cardinals
+            if _apply_action(ego_x, ego_y, act) not in active_cells
+        ]
+
+        safe_cardinals: List[str] = []
+        for act in cardinals:
             nx, ny = _apply_action(ego_x, ego_y, act)
             gets_closer_to_other = False
             for ex, ey, eid in active:
@@ -139,9 +164,27 @@ class DecisionMaking:
                     gets_closer_to_other = True
                     break
             if not gets_closer_to_other:
-                safe_actions.append(act)
+                safe_cardinals.append(act)
 
-        candidate_actions = safe_actions if safe_actions else legal
+        if safe_cardinals:
+            # At least one real cardinal doesn't close on any
+            # secondary threat. STAY is trivially safe; include it so
+            # the scoring can still pick it when no cardinal beats it
+            # (e.g. cornered prey with a single diagonal predator).
+            candidate_actions = safe_cardinals + (
+                [au.STAY] if au.STAY in legal else []
+            )
+        elif cardinals:
+            # Every cardinal closes on at least one secondary threat.
+            # Rather than freezing on STAY and letting the primary
+            # (closest) predator walk in, accept the secondary closure
+            # and pick the cardinal that most increases distance to
+            # the primary.
+            candidate_actions = cardinals
+        else:
+            # No legal cardinals at all (surrounded by walls). Whatever
+            # is legal — typically just STAY.
+            candidate_actions = legal
 
         def score_prey(act: str) -> Tuple[int, int]:
             nx, ny = _apply_action(ego_x, ego_y, act)

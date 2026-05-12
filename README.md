@@ -152,13 +152,54 @@ roles are currently defined:
 | Role | Team | Per-step behaviour |
 |------|------|--------------------|
 | `ROLE_CHASER` | predator | Greedy min-Manhattan chase against the closest target in `active_enemies`, falling back to `last_seen_enemy` when no enemy is visible. Stale memory at ego's cell is wiped and the agent explores. |
-| `ROLE_FLEE` | prey | Head away from the primary threat (the Manhattan-closest tracked predator) while avoiding moves that close distance to any other tracked predator. Same `last_seen_enemy` semantics as the chaser. |
+| `ROLE_FLEE` | prey | Head away from the primary threat (the Manhattan-closest tracked predator) while avoiding cardinal moves that close distance to any other tracked predator. Same `last_seen_enemy` semantics as the chaser. See "Prey flee scoring" below for the exact selection rule. |
 
 The selector and `choose_action` are deliberately small right now: the
 role API (function shape, sticky `role_target`, role letters in the
 GUI) is preserved so a richer taxonomy of hunting / protection
 strategies can be reintroduced without re-plumbing the per-step
 pipeline.
+
+### Prey flee scoring
+
+`DecisionMaking._flee` works in two stages: building the candidate
+set, then scoring it.
+
+**Stage 1 — candidate set.** Cardinal moves are checked against every
+*secondary* threat (every active predator other than the primary):
+a cardinal is "safe" iff it does not strictly close distance to any
+secondary predator. STAY is split out of this check from the start,
+because STAY has a zero delta and so trivially "doesn't close on
+anyone" — treating it as just another safe action used to let prey
+freeze whenever every real cardinal looked unsafe. Cardinals whose
+target cell is currently occupied by an active enemy (any predator
+the prey sees or has been told about) are also dropped up front
+as suicide moves — `legal_actions` only checks bounds and walls, so
+without this guard a prey adjacent to a predator can otherwise have
+the step-into-capture cardinal end up in `safe_cardinals` (since it
+moves further from every *other* predator) and propping STAY up as
+"least bad" on the Manhattan-to-primary tiebreak.
+
+- If at least one cardinal is safe, the candidate set is `safe_cardinals + [STAY]`. STAY is included because in narrow situations
+  (e.g. corner prey with a single diagonal predator at Manhattan 2)
+  it is genuinely the highest-distance option.
+- Otherwise, if any cardinals are legal at all, the candidate set is
+  the cardinals **without STAY**. This is the rule that prevents the
+  freeze cascade: rather than letting the primary walk in for free,
+  the prey accepts closing on a secondary threat and tries to
+  outrun the primary instead.
+- Otherwise (surrounded by walls — very rare) the candidate set is
+  whatever `legal_actions` returns, typically just STAY.
+
+**Stage 2 — scoring.** Candidates are scored on
+`(-manhattan_to_primary, jitter)`; `min` picks the move that
+maximises current Manhattan to the primary threat, ties broken by a
+per-agent RNG. No look-ahead and no map inspection — the prey acts
+on what it can observe right now and the position of its primary
+threat. Combined with Stage 1, this is enough to break the common
+multi-predator freeze cascade where one prey gets pinned by a
+`safe_actions = {STAY}` situation and its teammates pile up behind
+it.
 
 ---
 
