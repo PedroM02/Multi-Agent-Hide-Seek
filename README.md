@@ -163,7 +163,10 @@ pipeline.
 ### Prey flee scoring
 
 `DecisionMaking._flee` works in two stages: building the candidate
-set, then scoring it.
+set, then scoring it. Both stages are cohesion-aware: prey prefer to
+stay Chebyshev-1 of a visible teammate, which is the geometry that
+enables the cooperative-knockout mechanic (planned) and, even
+without it, reduces stragglers.
 
 **Stage 1 — candidate set.** Cardinal moves are checked against every
 *secondary* threat (every active predator other than the primary):
@@ -171,35 +174,73 @@ a cardinal is "safe" iff it does not strictly close distance to any
 secondary predator. STAY is split out of this check from the start,
 because STAY has a zero delta and so trivially "doesn't close on
 anyone" — treating it as just another safe action used to let prey
-freeze whenever every real cardinal looked unsafe. Cardinals whose
-target cell is currently occupied by an active enemy (any predator
-the prey sees or has been told about) are also dropped up front
-as suicide moves — `legal_actions` only checks bounds and walls, so
-without this guard a prey adjacent to a predator can otherwise have
-the step-into-capture cardinal end up in `safe_cardinals` (since it
-moves further from every *other* predator) and propping STAY up as
-"least bad" on the Manhattan-to-primary tiebreak.
+freeze whenever every real cardinal looked unsafe. Cardinals are
+then pruned by two guards, in order:
 
-- If at least one cardinal is safe, the candidate set is `safe_cardinals + [STAY]`. STAY is included because in narrow situations
-  (e.g. corner prey with a single diagonal predator at Manhattan 2)
-  it is genuinely the highest-distance option.
-- Otherwise, if any cardinals are legal at all, the candidate set is
-  the cardinals **without STAY**. This is the rule that prevents the
-  freeze cascade: rather than letting the primary walk in for free,
-  the prey accepts closing on a secondary threat and tries to
-  outrun the primary instead.
-- Otherwise (surrounded by walls — very rare) the candidate set is
-  whatever `legal_actions` returns, typically just STAY.
+1. **Suicide guard.** Drop any cardinal whose target cell is
+   currently occupied by an active enemy (a predator the prey sees
+   or has been told about). `legal_actions` only checks bounds and
+   walls, so without this guard a prey adjacent to a predator can
+   have the step-into-capture cardinal end up in `safe_cardinals`
+   (it moves further from every *other* predator) and the scorer
+   would happily pick it over STAY on the Manhattan tiebreak.
+2. **Ally-stack guard.** Drop any cardinal whose target cell is
+   currently occupied by a visible teammate. The cohesion term in
+   Stage 2 rewards Chebyshev adjacency (`d_a = 1`) to an ally, so
+   without this guard moves landing *on* a teammate (`d_a = 0`)
+   would score even better — but the action resolver always blocks
+   same-team stacking, so that's a wasted move. The guard keeps the
+   cohesion scoring honest: among the candidates we actually
+   evaluate, `d_a >= 1`.
 
-**Stage 2 — scoring.** Candidates are scored on
-`(-manhattan_to_primary, jitter)`; `min` picks the move that
-maximises current Manhattan to the primary threat, ties broken by a
-per-agent RNG. No look-ahead and no map inspection — the prey acts
-on what it can observe right now and the position of its primary
-threat. Combined with Stage 1, this is enough to break the common
+The candidate-set rules are then:
+
+- If at least one cardinal survives both guards and is also safe,
+  the candidate set is `safe_cardinals + [STAY]`. STAY is included
+  because in narrow situations (e.g. corner prey with a single
+  diagonal predator at Manhattan 2) it is genuinely the
+  highest-distance option.
+- Otherwise, if any cardinals survive the guards, the candidate set
+  is those cardinals **without STAY**. This is the rule that
+  prevents the freeze cascade: rather than letting the primary walk
+  in for free, the prey accepts closing on a secondary threat and
+  tries to outrun the primary instead.
+- Otherwise (every cardinal is a wall, a suicide, or a stack) the
+  candidate set is `[STAY]`. We don't fall back to the unpruned
+  `legal` here — we just decided every cardinal in it was bad, so
+  the scorer would only pick the least-bad of a bad bunch.
+
+**Stage 2 — scoring.** Candidates are scored lexicographically on
+`(-manhattan_to_primary, d_a - 1, jitter)`:
+
+- `-manhattan_to_primary` — same primary-threat term as before:
+  maximise current Manhattan distance to the closest tracked
+  predator.
+- `d_a - 1` — cohesion term. `d_a` is the minimum Chebyshev distance
+  from the candidate cell to any visible teammate; subtracting 1
+  makes `d_a = 1` the optimum. With no visible ally the term is
+  pinned to 0, so the cohesion rule collapses to the previous
+  primary-only scoring for solo prey.
+- `jitter` — per-agent RNG tiebreak.
+
+No look-ahead and no map inspection — the prey acts on what it can
+observe right now (primary-threat position, visible teammates). The
+guards plus the primary-only tactical term are what break the common
 multi-predator freeze cascade where one prey gets pinned by a
 `safe_actions = {STAY}` situation and its teammates pile up behind
-it.
+it; the cohesion term is what pulls scattered prey back into pairs
+once the immediate threat is handled.
+
+**Wander mode.** When the prey has no `active_enemies` and no
+`last_seen_enemy` (and likewise after stale memory at ego is
+cleared), it doesn't pick uniformly at random over `legal_actions`
+any more. Instead it runs the same ally-stack guard and then picks
+the cardinal (or STAY) that minimises `|d_a - 1|` to the nearest
+visible teammate, RNG breaking ties. This way prey preemptively form
+pairs *before* a predator shows up, which is what makes the
+cooperative geometry reachable in practice rather than only
+recoverable mid-flee. With no visible ally, wander remains a pure
+uniform random pick — identical to the prior behaviour.
 
 ---
 

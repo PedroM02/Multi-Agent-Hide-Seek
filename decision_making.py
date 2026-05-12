@@ -4,7 +4,7 @@ import random
 from typing import Any, Dict, List, Optional, Tuple
 
 import agent_utils as au
-from distances import manhattan
+from distances import chebyshev, manhattan
 from environment import Environment
 
 
@@ -104,6 +104,7 @@ class DecisionMaking:
         legal: List[str],
     ) -> Tuple[str, bool]:
         active = obs["active_enemies"]
+        visible_allies = obs.get("visible_allies", ())
         ego_x, ego_y = obs["ego_x"], obs["ego_y"]
 
         if active:
@@ -113,12 +114,22 @@ class DecisionMaking:
             target = last_seen_enemy
             stale = True
         else:
-            return self._rng.choice(legal), False
+            # No active threat and no memory. Wander, but bias toward
+            # visible allies so prey preemptively pair up before any
+            # threat appears (this is what makes the cooperative
+            # knockout mechanic reachable in practice).
+            return self._wander_with_cohesion(
+                ego_x, ego_y, legal, visible_allies
+            ), False
 
         assert target is not None
         tx, ty = target
         if stale and ego_x == tx and ego_y == ty:
-            return self._rng.choice(legal), True
+            # Reached the stale memory cell without finding the enemy;
+            # drop the memory and wander (still cohesion-biased).
+            return self._wander_with_cohesion(
+                ego_x, ego_y, legal, visible_allies
+            ), True
 
         # Current distances to all *non-primary* threats. The "safe"
         # check below only fires on these — only the primary target
@@ -153,6 +164,22 @@ class DecisionMaking:
             if _apply_action(ego_x, ego_y, act) not in active_cells
         ]
 
+        # Ally-stack guard: drop any cardinal whose target cell is
+        # currently occupied by a visible teammate. The cohesion term
+        # in `score_prey` below rewards Chebyshev adjacency to allies
+        # (d_a = 1), so a move that lands on an ally cell (d_a = 0)
+        # would actually score even better without this guard — but
+        # the action resolver blocks same-team stacking, so such a
+        # move is a wasted timestep at best (and visually noisy). The
+        # guard keeps the cohesion scoring honest: among the
+        # candidates we evaluate, d_a >= 1, and the optimum genuinely
+        # is "adjacent, not on top".
+        ally_cells = {(ax, ay) for ax, ay, _ in visible_allies}
+        cardinals = [
+            act for act in cardinals
+            if _apply_action(ego_x, ego_y, act) not in ally_cells
+        ]
+
         safe_cardinals: List[str] = []
         for act in cardinals:
             nx, ny = _apply_action(ego_x, ego_y, act)
@@ -182,15 +209,77 @@ class DecisionMaking:
             # the primary.
             candidate_actions = cardinals
         else:
-            # No legal cardinals at all (surrounded by walls). Whatever
-            # is legal — typically just STAY.
-            candidate_actions = legal
+            # No legal cardinals remain after the suicide and
+            # ally-stack guards (every cardinal would stack onto an
+            # enemy or a teammate, or there were no cardinals to
+            # begin with). Default to STAY — `legal` may still
+            # contain pruned cardinals, and we don't want the scorer
+            # to pick one of them after we just decided they're bad.
+            candidate_actions = [au.STAY] if au.STAY in legal else list(legal)
 
-        def score_prey(act: str) -> Tuple[int, int]:
+        def score_prey(act: str) -> Tuple[int, int, int]:
             nx, ny = _apply_action(ego_x, ego_y, act)
-            return (-manhattan(nx, ny, tx, ty), self._rng.randint(0, 1000))
+            d_primary = manhattan(nx, ny, tx, ty)
+            # Cohesion term: prefer moves that keep the prey within
+            # Chebyshev-1 of at least one visible teammate. d_a = 1
+            # is the sweet spot for the cooperative-knockout mechanic
+            # (two adjacent prey can stun a predator that is
+            # Chebyshev-1 of both). With no visible ally the term is
+            # neutral, which preserves the pre-cohesion behaviour for
+            # solo prey.
+            if visible_allies:
+                d_a = min(
+                    chebyshev(nx, ny, ax, ay)
+                    for (ax, ay, _) in visible_allies
+                )
+                ally_term = d_a - 1
+            else:
+                ally_term = 0
+            return (-d_primary, ally_term, self._rng.randint(0, 1000))
 
         return min(candidate_actions, key=score_prey), False
+
+    def _wander_with_cohesion(
+        self,
+        ego_x: int,
+        ego_y: int,
+        legal: List[str],
+        visible_allies: Tuple[Tuple[int, int, int], ...],
+    ) -> str:
+        """Cohesion-biased wander.
+
+        With no visible ally this is just a uniform random pick over
+        `legal` — same as the prior behaviour. With at least one
+        visible ally we apply the same stack guard as the flee path
+        and pick the move minimising Chebyshev distance to the
+        nearest ally (target d_a = 1), with random jitter as the
+        tiebreaker. STAY is always considered, so a prey that is
+        already adjacent to an ally happily holds the formation.
+        """
+        if not visible_allies:
+            return self._rng.choice(legal)
+
+        cardinals = [a for a in legal if a != au.STAY]
+        ally_cells = {(ax, ay) for ax, ay, _ in visible_allies}
+        cardinals = [
+            act for act in cardinals
+            if _apply_action(ego_x, ego_y, act) not in ally_cells
+        ]
+        candidates = cardinals + (
+            [au.STAY] if au.STAY in legal else []
+        )
+        if not candidates:
+            candidates = list(legal)
+
+        def score(act: str) -> Tuple[int, int]:
+            nx, ny = _apply_action(ego_x, ego_y, act)
+            d_a = min(
+                chebyshev(nx, ny, ax, ay)
+                for (ax, ay, _) in visible_allies
+            )
+            return (abs(d_a - 1), self._rng.randint(0, 1000))
+
+        return min(candidates, key=score)
 
     def _navigate_to(
         self,
