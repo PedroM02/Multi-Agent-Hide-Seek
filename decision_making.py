@@ -306,12 +306,29 @@ class DecisionMaking:
             au.ROLE_CHASER if team == au.TEAM_PREDATOR else au.ROLE_FLEE,
         )
         role_target = obs.get("role_target", None)
+        enable_roles = obs.get("enable_roles", False)
 
-        # Capture-imminent pickup guard. With 4-cardinal movement, an enemy
-        # at Manhattan <= 1 can step into ego next turn. Picking up forfeits
-        # movement, so we skip PICKUP and let the chase / flee / role logic
-        # handle the urgent step. The guard only inspects active_enemies
-        # (direct + teammate reports); stale memory does not block pickup.
+        # The full obstacle pipeline (PICKUP here, DROP / FLANKER / NET /
+        # SHIELDER / BREADCRUMB downstream) is gated on enable_roles.
+        # When roles are off we strip PICKUP / DROP out of `legal` up
+        # front: the downstream chase / flee branches consult `legal`
+        # both for explicit choices and for their random-walk fallback,
+        # and PICKUP / DROP have a zero movement delta so they would
+        # otherwise tie with STAY in `_navigate_to`. Stripping here is
+        # the single switch that guarantees "no obstacle interaction"
+        # under the default flag set.
+        if not enable_roles:
+            legal = [a for a in legal if a not in (au.PICKUP, au.DROP)]
+            if not legal:
+                return au.STAY, False
+
+        # Capture-imminent pickup guard (roles-on only — when roles are
+        # off PICKUP was already stripped above). With 4-cardinal
+        # movement, an enemy at Manhattan <= 1 can step into ego next
+        # turn. Picking up forfeits movement, so we skip PICKUP and let
+        # the chase / flee / role logic handle the urgent step. The
+        # guard only inspects active_enemies (direct + teammate
+        # reports); stale memory does not block pickup.
         if au.PICKUP in legal:
             threat_within_one = any(
                 abs(ex - ego_x) + abs(ey - ego_y) <= 1

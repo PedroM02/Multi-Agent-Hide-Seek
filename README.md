@@ -2,10 +2,11 @@
 
 A grid-world predator-prey simulation built as a small multi-agent
 system. Predators (purple) chase prey (green); prey try to escape until
-the timestep budget runs out. Both teams have partial information,
-optional intra-team communication, pickable obstacles with team
-ownership, and strategy roles assigned every step by a centralised
-selector.
+the timestep budget runs out. The baseline behaviour is plain chase
+vs. flee with partial information; opt-in flags layer on intra-team
+communication (`--comms`) and a team strategy role system
+(`--roles`) that adds pickable obstacles with team ownership and
+role-based use of them.
 
 The codebase favours readability over performance: the per-step pipeline
 is explicit, every public field is small and documented, and behaviour
@@ -130,8 +131,14 @@ The per-step pipeline lives in [`simulation.py`](simulation.py)
    memory is refreshed via
    [`Perception.update_last_seen_enemy`](perception.py) — the fresher
    signal (own eyes or a teammate's eyes) wipes out any older memory.
-4. **Role assignment.** The team role selector runs once per team (see
-   "Roles" below). It writes a `(role, role_target)` onto every Agent.
+4. **Role assignment** (optional, opt-in via `--roles`). When the flag
+   is on, the team role selector runs once per team (see "Roles"
+   below) and writes a `(role, role_target)` onto every Agent. When
+   off, every agent keeps the default role it was constructed with
+   (`ROLE_CHASER` for predators, `ROLE_FLEE` for prey) and the
+   decision layer additionally suppresses every obstacle interaction
+   so the game collapses to plain chase vs. flee on top of the
+   walls / obstacles that happen to exist on the map.
 5. **Per-agent decision.** Each agent's `Agent.decide` calls
    `DecisionMaking.choose_action` with the comms-augmented obs plus
    `last_seen_enemy`. The chosen action goes back to action resolution.
@@ -224,7 +231,17 @@ any invulnerability frames.
 
 ## Roles
 
-Roles are assigned every step by a team-level selector
+Roles are an opt-in extension enabled with `--roles`. **Default
+behaviour is plain chase vs. flee with no obstacle interaction.** When
+the flag is off, the team role selector is skipped, every agent keeps
+its construction-time role (`ROLE_CHASER` for predators, `ROLE_FLEE`
+for prey), and `DecisionMaking.choose_action` short-circuits the
+obstacle pipeline: `PICKUP` is never chosen, so no agent ever holds an
+obstacle, so `DROP` never becomes legal either, and the FLANKER / NET /
+SHIELDER / BREADCRUMB / BUNKER branches are unreachable.
+
+The rest of this section describes what those branches do **when the
+flag is on**. Roles are assigned every step by a team-level selector
 (`decision_making.select_team_roles`) and consumed by the per-agent
 behaviour in `DecisionMaking.choose_action`. Each agent gets a
 `(role, role_target)` pair:
@@ -350,7 +367,8 @@ All flags are kebab-case; full list available via `python main.py --help`.
 | `--wall-size N` | 2 | Length of each generated wall segment |
 | `--obstacles N` | 0 | Number of pickable obstacles to spawn |
 | `--comms` | off | Enable speaker-centric, single-hop team communication |
-| `--lock-mode {symmetric, owner-passable}` | symmetric | Obstacle locking semantics |
+| `--roles` | off | Enable team strategy roles + obstacle interaction (without it agents only chase / flee and ignore obstacles) |
+| `--lock-mode {symmetric, owner-passable}` | symmetric | Obstacle locking semantics (no effect when `--roles` is off, since nothing ever gets locked) |
 
 Determinism: a given `(seed, run index, all other flags)` reproduces
 exactly the same episode trace, because every stochastic choice flows

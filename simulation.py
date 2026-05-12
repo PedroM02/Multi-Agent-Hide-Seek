@@ -116,6 +116,7 @@ class SimulationConfig:
         self.num_walls: int = 0
         self.wall_size: int = 3
         self.enable_comms: bool = False
+        self.enable_roles: bool = False
         self.lock_mode: str = "symmetric"
 
 
@@ -134,6 +135,7 @@ def copy_config(base: SimulationConfig, **overrides) -> SimulationConfig:
     c.num_walls = base.num_walls
     c.wall_size = base.wall_size
     c.enable_comms = base.enable_comms
+    c.enable_roles = base.enable_roles
     c.lock_mode = base.lock_mode
     for k, v in overrides.items():
         setattr(c, k, v)
@@ -231,22 +233,26 @@ class SimulationState:
         for aid, obs in raw_obs.items():
             agents_by_id[aid].prepare_observation(obs, shared_enemies[aid])
 
-        # Phase 2c: per-team role assignment. The selector reads the
-        # comms-augmented obs and the agent's previous role_target (for
-        # stickiness), and writes the new role + role_target back onto
-        # each Agent. We then thread role and role_target into obs so the
-        # individual decision logic can dispatch on them.
-        for team in (au.TEAM_PREDATOR, au.TEAM_PREY):
-            team_ids = [
-                aid for aid, ob in raw_obs.items() if ob["team"] == team
-            ]
-            assignments = select_team_roles(
-                team, team_ids, raw_obs, agents_by_id, self.env,
-            )
-            for aid, (role, target) in assignments.items():
-                a = agents_by_id[aid]
-                a.role = role
-                a.role_target = target
+        # Phase 2c: per-team role assignment (opt-in). When --roles is on,
+        # the selector reads the comms-augmented obs and the agent's
+        # previous role_target (for stickiness) and writes the new role
+        # plus role_target back onto each Agent. When --roles is off,
+        # every agent keeps the default role it was constructed with
+        # (CHASER for predators, FLEE for prey) and the decision layer
+        # additionally suppresses obstacle interaction — see the
+        # enable_roles gate in DecisionMaking.choose_action.
+        if self.config.enable_roles:
+            for team in (au.TEAM_PREDATOR, au.TEAM_PREY):
+                team_ids = [
+                    aid for aid, ob in raw_obs.items() if ob["team"] == team
+                ]
+                assignments = select_team_roles(
+                    team, team_ids, raw_obs, agents_by_id, self.env,
+                )
+                for aid, (role, target) in assignments.items():
+                    a = agents_by_id[aid]
+                    a.role = role
+                    a.role_target = target
 
         # Phase 3: agents decide using direct sightings, then teammate
         # reports, then their own memory — now within their assigned role.
@@ -258,6 +264,7 @@ class SimulationState:
             obs = dict(raw_obs[agent.agent_id])
             obs["role"] = agent.role
             obs["role_target"] = agent.role_target
+            obs["enable_roles"] = self.config.enable_roles
             intentions[agent.agent_id] = agent.decide(obs)
 
         resolve_actions(self.env, intentions, self.rng)
