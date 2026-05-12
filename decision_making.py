@@ -164,21 +164,22 @@ class DecisionMaking:
             if _apply_action(ego_x, ego_y, act) not in active_cells
         ]
 
-        # Ally-stack guard: drop any cardinal whose target cell is
-        # currently occupied by a visible teammate. The cohesion term
-        # in `score_prey` below rewards Chebyshev adjacency to allies
-        # (d_a = 1), so a move that lands on an ally cell (d_a = 0)
-        # would actually score even better without this guard — but
-        # the action resolver blocks same-team stacking, so such a
-        # move is a wasted timestep at best (and visually noisy). The
-        # guard keeps the cohesion scoring honest: among the
-        # candidates we evaluate, d_a >= 1, and the optimum genuinely
-        # is "adjacent, not on top".
-        ally_cells = {(ax, ay) for ax, ay, _ in visible_allies}
-        cardinals = [
-            act for act in cardinals
-            if _apply_action(ego_x, ego_y, act) not in ally_cells
-        ]
+        # No ally-stack guard here. A move that lands on a teammate's
+        # current cell ("stacking") is *not* pruned: when the
+        # teammate is moving away this step, the action resolver
+        # cleanly cascades and the prey follows into the vacated
+        # cell — that's the "cascade-follow" path which is sometimes
+        # the only safe escape (e.g. cornered prey with the only
+        # safe cardinal pointing through a fleeing ally). The
+        # cohesion term in `score_prey` below uses |d_a - 1| (not
+        # d_a - 1), so d_a = 0 (stack) ties d_a = 2 (one cell away)
+        # at score 1 instead of being uniquely rewarded — the
+        # scorer no longer prefers stacking purely for its own
+        # sake. When the teammate actually stays put the resolver
+        # blocks the stack and forces STAY for this step (one
+        # wasted step), which is strictly cheaper than the
+        # alternative (refusing to stack and walking into a
+        # predator instead).
 
         safe_cardinals: List[str] = []
         for act in cardinals:
@@ -209,12 +210,12 @@ class DecisionMaking:
             # the primary.
             candidate_actions = cardinals
         else:
-            # No legal cardinals remain after the suicide and
-            # ally-stack guards (every cardinal would stack onto an
-            # enemy or a teammate, or there were no cardinals to
-            # begin with). Default to STAY — `legal` may still
-            # contain pruned cardinals, and we don't want the scorer
-            # to pick one of them after we just decided they're bad.
+            # No legal cardinals remain after the suicide guard
+            # (every cardinal would step onto an active enemy, or
+            # there were no cardinals to begin with). Default to
+            # STAY — `legal` may still contain pruned cardinals, and
+            # we don't want the scorer to pick one of them after we
+            # just decided they're bad.
             candidate_actions = [au.STAY] if au.STAY in legal else list(legal)
 
         def score_prey(act: str) -> Tuple[int, int, int]:
@@ -224,15 +225,22 @@ class DecisionMaking:
             # Chebyshev-1 of at least one visible teammate. d_a = 1
             # is the sweet spot for the cooperative-knockout mechanic
             # (two adjacent prey can stun a predator that is
-            # Chebyshev-1 of both). With no visible ally the term is
-            # neutral, which preserves the pre-cohesion behaviour for
-            # solo prey.
+            # Chebyshev-1 of both). Using |d_a - 1| (not d_a - 1)
+            # means d_a = 0 (stacking onto an ally cell) is no longer
+            # the unique optimum — it ties d_a = 2 at score 1. The
+            # scorer therefore doesn't prefer stack moves for their
+            # own sake; when one is picked it's because the primary-
+            # distance key (the first lex key) already strictly
+            # favoured it, in which case the action resolver will
+            # cascade-follow the ally if it moves, or force a STAY
+            # if it doesn't — both acceptable. With no visible ally
+            # the term is neutral, preserving solo-prey behaviour.
             if visible_allies:
                 d_a = min(
                     chebyshev(nx, ny, ax, ay)
                     for (ax, ay, _) in visible_allies
                 )
-                ally_term = d_a - 1
+                ally_term = abs(d_a - 1)
             else:
                 ally_term = 0
             return (-d_primary, ally_term, self._rng.randint(0, 1000))

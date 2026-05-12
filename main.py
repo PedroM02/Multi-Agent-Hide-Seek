@@ -32,6 +32,7 @@ def main() -> None:
     parser.add_argument("--walls", type=int, default=2, dest="num_walls", help="Number of wall segments to generate randomly.",)
     parser.add_argument("--wall-size", type=int, default=2, dest="wall_size", help="Length (in cells) of each randomly generated wall segment.",)
     parser.add_argument("--comms", action="store_true", help="Enable team communications (opt-in). Each agent broadcasts directly-visible enemies to teammates inside its vision radius; receivers fall back from direct sight to teammate reports to memory.",)
+    parser.add_argument("--prey-defend", action="store_true", dest="prey_defend", help="Enable the cooperative-knockout mechanic (opt-in). Groups of Chebyshev-adjacent prey can stun predators that are Cheb-1 of >=2 group members: up to n-1 predators per group of size n. Stunned predators stay frozen and cannot capture for 3 timesteps; the prey doing the sandwiching are forced to STAY that step.",)
     args = parser.parse_args()
 
     config = SimulationConfig()
@@ -46,6 +47,7 @@ def main() -> None:
     config.num_walls = args.num_walls
     config.wall_size = args.wall_size
     config.enable_comms = args.comms
+    config.prey_defend = args.prey_defend
 
     if args.gui:
         from visualization import run_visualization

@@ -9,6 +9,13 @@ class AgentBody:
         self.x = x
         self.y = y
         self.alive = alive
+        # Steps of "stun" remaining for this body. Only predators are
+        # ever stunned (by the cooperative-knockout mechanic, opt-in
+        # via --prey-defend). While stun_remaining > 0 the action
+        # resolver still moves the agent according to its intention,
+        # but the simulation overrides that intention to STAY and the
+        # capture pass skips the predator. 0 is the "active" state.
+        self.stun_remaining = 0
 
 
 class Environment:
@@ -125,10 +132,19 @@ class Environment:
             agent_cell = (agent_body.x, agent_body.y)
             cells_with_agents[agent_cell] = cells_with_agents.get(agent_cell, []) + [agent_body]
         
-        # Check if there are predators and prey in the same cell and capture the prey
+        # Check if there are predators and prey in the same cell and capture the prey.
+        # Stunned predators (stun_remaining > 0) are skipped here: they
+        # cannot capture for the duration of the stun, so a prey
+        # co-located with only stunned predators is not lost. A prey
+        # sharing a cell with at least one *active* predator is still
+        # captured normally.
         captured = []
         for cell, bodies_in_cell in cells_with_agents.items():
-            preds = [agent_body for agent_body in bodies_in_cell if agent_body.team == au.TEAM_PREDATOR]
+            preds = [
+                agent_body for agent_body in bodies_in_cell
+                if agent_body.team == au.TEAM_PREDATOR
+                and agent_body.stun_remaining == 0
+            ]
             preys = [agent_body for agent_body in bodies_in_cell if agent_body.team == au.TEAM_PREY]
             if preds and preys:
                 for prey in preys:

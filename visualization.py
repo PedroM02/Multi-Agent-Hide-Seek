@@ -61,12 +61,23 @@ def _draw_grid(
             continue
         rect = pygame.Rect(b.x * CELL + 2, b.y * CELL + 2, CELL - 4, CELL - 4)
         col = GRID_PRED if b.team == au.TEAM_PREDATOR else GRID_PREY
+        # Stunned predators are drawn dimmed so the "knocked out" state
+        # is immediately readable. The role letter also picks up the
+        # dimming so the whole body reads as inactive.
+        stunned = b.team == au.TEAM_PREDATOR and b.stun_remaining > 0
+        if stunned:
+            col = tuple(c // 2 for c in col)
         pygame.draw.rect(grid_surf, col, rect, border_radius=4)
 
         a = agent_by_id.get(b.agent_id)
         if a is not None:
             letter = au.ROLE_LETTER.get(a.role, "?")
-            label = font.render(letter, True, ROLE_LETTER_COLOR)
+            letter_color = (
+                tuple(c // 2 for c in ROLE_LETTER_COLOR)
+                if stunned
+                else ROLE_LETTER_COLOR
+            )
+            label = font.render(letter, True, letter_color)
             lw, lh = label.get_size()
             cx = b.x * CELL + CELL // 2
             cy = b.y * CELL + CELL // 2

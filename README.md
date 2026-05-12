@@ -84,9 +84,100 @@ Two distance metrics show up in the codebase:
 ### Capture
 
 After actions resolve, any cell that contains at least one alive
-predator and at least one alive prey marks every prey on that cell as
-captured. The episode ends the moment every prey is dead (predators
-win) or when the timestep budget elapses (prey wins on timeout).
+*active* predator and at least one alive prey marks every prey on
+that cell as captured. "Active" here means `stun_remaining == 0` —
+stunned predators (see "Prey-defend (cooperative knockout)" below)
+cannot capture, so a prey co-located only with stunned predators
+survives the step. The episode ends the moment every prey is dead
+(predators win) or when the timestep budget elapses (prey wins on
+timeout).
+
+---
+
+## Prey-defend (cooperative knockout)
+
+Opt-in via `--prey-defend`. Off by default, in which case nothing in
+the stun system ever fires and the rest of the rules are unchanged.
+
+When enabled, groups of Chebyshev-adjacent prey can temporarily stun
+predators that they collectively sandwich. The intent is to give
+prey a cooperative tool that pays off the cohesion bias in
+`_flee` / `_wander_with_cohesion`: pairs and packs become a real
+defensive asset and not just less-scattered targets.
+
+### Mechanic
+
+1. **Groups.** Alive prey are partitioned by connected components on
+   the prey-prey Chebyshev-1 adjacency graph. So a chain A–B–C
+   (each pair Cheb-1 of the next) is one group of size 3 even when
+   A and C are Cheb-2 apart.
+2. **Stunnable predator.** A predator P is stunnable by a group G
+   iff P is alive, is not already stunned (`stun_remaining == 0`),
+   has not been stunned by an earlier group this same step, and is
+   Chebyshev-1 of at least 2 distinct members of G. This is the
+   natural generalisation of the n = 2 "Cheb-1 of both prey" rule.
+3. **Cap.** A group of size n can stun at most `n - 1` predators
+   per step. When there are more stunnable candidates than the
+   cap, the lowest predator agent id wins (fully deterministic —
+   no RNG flows through the knockout pass at all).
+4. **Forced STAY.** For every newly stunned predator, the prey from
+   the group that are Cheb-1 of that predator (the "sandwichers")
+   have their pending action overridden to STAY for this step.
+   Other group members can move normally — the freeze is the price
+   paid by the prey actually doing the sandwiching, not by the
+   whole pack.
+5. **Stun duration.** `stun_duration = 3` steps total, including
+   the step the stun was applied. While `stun_remaining > 0` the
+   predator's action is overridden to STAY at the start of every
+   step (`Phase 4a` of `step_once`) and the capture pass skips it,
+   so a stunned predator standing on a prey cell does *not*
+   capture. Decrement happens at end of step; the predator is back
+   online on the 4th step after the stun.
+6. **No post-stun immunity.** As soon as `stun_remaining` reaches 0
+   the predator is a fresh candidate for the next group's
+   knockout, if the geometry still holds.
+
+### Pipeline ordering
+
+`SimulationState.step_once` runs the stun system between agent
+decisions and action resolution:
+
+1. Phase 1–3: observations → comms → role assignment → `decide`,
+   exactly as without `--prey-defend`. Stunned predators still call
+   `decide` so their `last_seen_enemy` and perception bookkeeping
+   stay consistent across the stun window; only the *action* is
+   overridden.
+2. **Phase 4a** (only when `prey_defend`): every predator with
+   `stun_remaining > 0` has its intention overridden to STAY.
+3. **Phase 4b** (only when `prey_defend`):
+   `SimulationState._resolve_knockouts` builds groups, picks
+   stunnable predators per the rules above, writes
+   `stun_remaining = stun_duration` onto each newly stunned
+   predator, and overrides sandwicher prey to STAY.
+4. Resolver and capture pass run as usual; the capture pass reads
+   `stun_remaining` directly (no extra plumbing needed).
+5. **Phase 5** (only when `prey_defend`): decrement every positive
+   `stun_remaining` by 1.
+
+This ordering means stunning is *prophylactic* — a predator that
+was going to capture this very step gets its action overwritten
+before the resolver runs, so the prey survives.
+
+### Design notes
+
+- Prey observations do not change. Prey still see stunned predators
+  as enemies; their flee logic still treats them as threats. This is
+  intentional: a stunned predator's stun window is finite, so prey
+  keeping distance is the right move. It also means we don't need
+  to plumb a new observation field, and `Perception` is unchanged.
+- The mechanic interacts predictably with multi-predator games: an
+  unstunned predator can still capture a sandwicher prey on the same
+  step that prey is forced to STAY. The cap rule (n - 1, not n)
+  bakes this trade-off in by design.
+- Determinism: the knockout pass is RNG-free. Groups are processed
+  in ascending min-id order; within a group, predator candidates
+  are sorted by id. Replays with identical seeds + flags produce
+  identical traces.
 
 ---
 
@@ -134,10 +225,25 @@ The per-step pipeline lives in [`simulation.py`](simulation.py)
    `last_seen_enemy`. `choose_action` currently dispatches on team
    alone (predators chase, prey flee). The chosen action goes back to
    action resolution.
+6. **Stun system** (optional, opt-in via `--prey-defend`). Sits
+   between decisions and the resolver. Two phases:
+   - 4a: predators with `stun_remaining > 0` from a previous step
+     have their action overridden to STAY.
+   - 4b: `_resolve_knockouts` runs the cooperative-knockout pass,
+     stunning up to `n - 1` predators per prey group and forcing
+     the sandwicher prey to STAY. See "Prey-defend (cooperative
+     knockout)" above for the full rules.
+7. **Resolution, capture, and stun decrement.** Action resolver runs
+   over the (possibly overridden) intentions; the capture pass skips
+   stunned predators; finally positive `stun_remaining` values are
+   decremented by 1.
 
 This ordering makes the contract simple: the selector and the agent
 both consume the same `active_enemies` set, so they cannot disagree
-about who the threat is or where it is.
+about who the threat is or where it is. The stun system is purely
+additive — with `--prey-defend` off, steps 6 and the stun-aware part
+of step 7 collapse to no-ops and the rest of the pipeline is
+unchanged.
 
 ---
 
@@ -175,7 +281,7 @@ secondary predator. STAY is split out of this check from the start,
 because STAY has a zero delta and so trivially "doesn't close on
 anyone" — treating it as just another safe action used to let prey
 freeze whenever every real cardinal looked unsafe. Cardinals are
-then pruned by two guards, in order:
+then pruned by one guard:
 
 1. **Suicide guard.** Drop any cardinal whose target cell is
    currently occupied by an active enemy (a predator the prey sees
@@ -184,63 +290,82 @@ then pruned by two guards, in order:
    have the step-into-capture cardinal end up in `safe_cardinals`
    (it moves further from every *other* predator) and the scorer
    would happily pick it over STAY on the Manhattan tiebreak.
-2. **Ally-stack guard.** Drop any cardinal whose target cell is
-   currently occupied by a visible teammate. The cohesion term in
-   Stage 2 rewards Chebyshev adjacency (`d_a = 1`) to an ally, so
-   without this guard moves landing *on* a teammate (`d_a = 0`)
-   would score even better — but the action resolver always blocks
-   same-team stacking, so that's a wasted move. The guard keeps the
-   cohesion scoring honest: among the candidates we actually
-   evaluate, `d_a >= 1`.
+
+Cardinals that land on a visible teammate's *current* cell
+("stack" moves) are deliberately **not** pruned. Action resolution
+is simultaneous, so when the teammate is itself moving away this
+step the step-1 cell is free by the time the resolver lays down
+final positions; the prey just cascade-follows into the vacated
+spot. Earlier versions of `_flee` did prune stack moves up front,
+but that throws away the cascade-follow path in exactly the
+situations where it's most valuable — cornered prey whose only
+"safe" cardinal points through a fleeing ally. The cost of leaving
+stack moves in is one wasted step when the ally actually decides
+to STAY (the resolver then blocks the stack and the prey is forced
+to STAY too), which is strictly cheaper than refusing the cascade
+and walking into a predator. See "Stage 2 — scoring" below for
+how the cohesion term is shaped so the scorer doesn't pick stack
+moves *for their own sake*.
 
 The candidate-set rules are then:
 
-- If at least one cardinal survives both guards and is also safe,
-  the candidate set is `safe_cardinals + [STAY]`. STAY is included
-  because in narrow situations (e.g. corner prey with a single
-  diagonal predator at Manhattan 2) it is genuinely the
+- If at least one cardinal survives the suicide guard and is also
+  safe, the candidate set is `safe_cardinals + [STAY]`. STAY is
+  included because in narrow situations (e.g. corner prey with a
+  single diagonal predator at Manhattan 2) it is genuinely the
   highest-distance option.
-- Otherwise, if any cardinals survive the guards, the candidate set
-  is those cardinals **without STAY**. This is the rule that
-  prevents the freeze cascade: rather than letting the primary walk
-  in for free, the prey accepts closing on a secondary threat and
-  tries to outrun the primary instead.
-- Otherwise (every cardinal is a wall, a suicide, or a stack) the
-  candidate set is `[STAY]`. We don't fall back to the unpruned
-  `legal` here — we just decided every cardinal in it was bad, so
-  the scorer would only pick the least-bad of a bad bunch.
+- Otherwise, if any cardinals survive the suicide guard, the
+  candidate set is those cardinals **without STAY**. This is the
+  rule that prevents the freeze cascade: rather than letting the
+  primary walk in for free, the prey accepts closing on a
+  secondary threat and tries to outrun the primary instead.
+- Otherwise (every cardinal is a wall or a suicide) the candidate
+  set is `[STAY]`. We don't fall back to the unpruned `legal`
+  here — we just decided every cardinal in it was bad, so the
+  scorer would only pick the least-bad of a bad bunch.
 
 **Stage 2 — scoring.** Candidates are scored lexicographically on
-`(-manhattan_to_primary, d_a - 1, jitter)`:
+`(-manhattan_to_primary, |d_a - 1|, jitter)`:
 
 - `-manhattan_to_primary` — same primary-threat term as before:
   maximise current Manhattan distance to the closest tracked
   predator.
-- `d_a - 1` — cohesion term. `d_a` is the minimum Chebyshev distance
-  from the candidate cell to any visible teammate; subtracting 1
-  makes `d_a = 1` the optimum. With no visible ally the term is
-  pinned to 0, so the cohesion rule collapses to the previous
-  primary-only scoring for solo prey.
+- `|d_a - 1|` — cohesion term. `d_a` is the minimum Chebyshev
+  distance from the candidate cell to any visible teammate. The
+  absolute-value shape makes `d_a = 1` the unique optimum
+  (score 0); `d_a = 0` (a stack move) and `d_a = 2` both score 1
+  and tie. This is the key half of the "no ally-stack guard"
+  trade-off: stack moves are no longer *uniquely* rewarded by the
+  cohesion term, so the only way a stack move gets picked is if
+  the primary-distance key strictly favoured it on its own merits
+  (e.g. it's the only safe cardinal). With no visible ally the
+  term is pinned to 0, so the cohesion rule collapses to the
+  previous primary-only scoring for solo prey.
 - `jitter` — per-agent RNG tiebreak.
 
 No look-ahead and no map inspection — the prey acts on what it can
 observe right now (primary-threat position, visible teammates). The
-guards plus the primary-only tactical term are what break the common
-multi-predator freeze cascade where one prey gets pinned by a
-`safe_actions = {STAY}` situation and its teammates pile up behind
-it; the cohesion term is what pulls scattered prey back into pairs
-once the immediate threat is handled.
+suicide guard plus the primary-only tactical term are what break
+the common multi-predator freeze cascade where one prey gets
+pinned by a `safe_actions = {STAY}` situation and its teammates
+pile up behind it; the cohesion term is what pulls scattered prey
+back into pairs once the immediate threat is handled; and the
+removal of the old ally-stack guard is what lets two prey
+cascade-flee through each other when geometry forces it.
 
 **Wander mode.** When the prey has no `active_enemies` and no
 `last_seen_enemy` (and likewise after stale memory at ego is
 cleared), it doesn't pick uniformly at random over `legal_actions`
-any more. Instead it runs the same ally-stack guard and then picks
-the cardinal (or STAY) that minimises `|d_a - 1|` to the nearest
-visible teammate, RNG breaking ties. This way prey preemptively form
-pairs *before* a predator shows up, which is what makes the
-cooperative geometry reachable in practice rather than only
-recoverable mid-flee. With no visible ally, wander remains a pure
-uniform random pick — identical to the prior behaviour.
+any more. Instead it drops cardinals that would land on a visible
+teammate (the wander path keeps an ally-stack guard locally —
+there is no primary-distance imperative in wander, so the
+cascade-follow trade-off doesn't apply) and picks the cardinal (or
+STAY) that minimises `|d_a - 1|` to the nearest visible teammate,
+RNG breaking ties. This way prey preemptively form pairs *before*
+a predator shows up, which is what makes the cooperative geometry
+reachable in practice rather than only recoverable mid-flee. With
+no visible ally, wander remains a pure uniform random pick —
+identical to the prior behaviour.
 
 ---
 
@@ -252,8 +377,9 @@ uniform random pick — identical to the prior behaviour.
 | Element | Meaning |
 |---------|---------|
 | Purple rounded rect | Predator body |
+| Dimmed (~50%) purple rounded rect | Stunned predator (active only with `--prey-defend`; cannot move or capture for `stun_duration` steps) |
 | Green rounded rect | Prey body |
-| Single white letter inside a body | Current role (`C` chaser, `-` flee) |
+| Single white letter inside a body | Current role (`C` chaser, `F` flee) — also dimmed when the body is stunned |
 | Dark grey filled cell | Wall |
 
 Controls: `space` / `right` step once, `a` toggles auto-run, `r` resets
@@ -290,6 +416,7 @@ All flags are kebab-case; full list available via `python main.py --help`.
 | `--walls N` | 2 | Random wall segments to generate |
 | `--wall-size N` | 2 | Length of each generated wall segment |
 | `--comms` | off | Enable speaker-centric, single-hop team communication |
+| `--prey-defend` | off | Enable the cooperative-knockout mechanic: groups of Cheb-1 prey can stun up to `n-1` adjacent predators for 3 steps (sandwicher prey are forced to STAY that step). See "Prey-defend (cooperative knockout)" above. |
 
 Determinism: a given `(seed, run index, all other flags)` reproduces
 exactly the same episode trace, because every stochastic choice flows

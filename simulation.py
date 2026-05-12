@@ -7,6 +7,7 @@ import agent_utils as au
 from action_resolution import resolve_actions
 from agent import Agent, build_agents_for_env
 from decision_making import select_team_roles
+from distances import chebyshev
 from environment import Environment
 from observation_definition import build_observation
 from reward_attribution import attribute_rewards
@@ -115,6 +116,12 @@ class SimulationConfig:
         self.num_walls: int = 0
         self.wall_size: int = 3
         self.enable_comms: bool = False
+        # Cooperative-knockout (prey-defend) mechanic. When enabled,
+        # groups of Chebyshev-adjacent prey can stun predators that
+        # are Chebyshev-1 of >=2 group members. See
+        # `SimulationState._resolve_knockouts` for the full rules.
+        self.prey_defend: bool = False
+        self.stun_duration: int = 3
 
 
 def copy_config(base: SimulationConfig, **overrides) -> SimulationConfig:
@@ -131,6 +138,8 @@ def copy_config(base: SimulationConfig, **overrides) -> SimulationConfig:
     c.num_walls = base.num_walls
     c.wall_size = base.wall_size
     c.enable_comms = base.enable_comms
+    c.prey_defend = base.prey_defend
+    c.stun_duration = base.stun_duration
     for k, v in overrides.items():
         setattr(c, k, v)
     return c
@@ -256,11 +265,46 @@ class SimulationState:
             obs["role_target"] = agent.role_target
             intentions[agent.agent_id] = agent.decide(obs)
 
+        # Phase 4: stun system (opt-in via --prey-defend). Two passes:
+        #   4a. Existing stuns: any predator with stun_remaining > 0
+        #       from a previous step is locked to STAY this step. We
+        #       still let it call decide() above so its perception
+        #       and memory bookkeeping stay consistent across the
+        #       window; only the action is overridden.
+        #   4b. Cooperative knockout: groups of Chebyshev-adjacent
+        #       prey stun up to n-1 active predators (see the method
+        #       docstring for the exact rules). Newly stunned
+        #       predators are locked to STAY and the "sandwicher"
+        #       prey (those at Cheb-1 of a stunned predator) are
+        #       also locked to STAY for this step.
+        if self.config.prey_defend:
+            for body in self.env.agent_bodies.values():
+                if (
+                    body.team == au.TEAM_PREDATOR
+                    and body.alive
+                    and body.stun_remaining > 0
+                ):
+                    intentions[body.agent_id] = au.STAY
+            self._resolve_knockouts(intentions)
+
         resolve_actions(self.env, intentions, self.rng)
         captured = self.env.apply_captures()
         rews = attribute_rewards(self.env, captured)
         for aid, r in rews.items():
             self.cumulative_rewards[aid] = self.cumulative_rewards.get(aid, 0.0) + r
+
+        # Phase 5: decrement stun timers at end of step. A stun of
+        # duration D applied on step T overrides the predator on
+        # steps T, T+1, ..., T+D-1 (D forced-STAY steps in total) and
+        # the predator is back online on step T+D. This is what
+        # decrementing after the action+capture passes gives us:
+        # stun_remaining is D at the start of step T (override
+        # applied, capture skipped, then decremented to D-1) and 0 at
+        # the start of step T+D.
+        if self.config.prey_defend:
+            for body in self.env.agent_bodies.values():
+                if body.team == au.TEAM_PREDATOR and body.stun_remaining > 0:
+                    body.stun_remaining -= 1
 
         self.step_index += 1
 
@@ -274,6 +318,121 @@ class SimulationState:
                 self.outcome = au.OUTCOME_PREDATORS_WIN
             return False
         return True
+
+    def _resolve_knockouts(self, intentions: Dict[int, str]) -> None:
+        """Cooperative knockout pass for the prey-defend mechanic.
+
+        Identifies groups of alive prey by connected components on
+        the prey-prey Chebyshev-1 adjacency graph. For each group of
+        size n >= 2:
+
+        * Candidate predators are alive, not currently stunned
+          (stun_remaining == 0), not already stunned by an earlier
+          group this same step, and Chebyshev-1 of at least 2
+          distinct group members ("sandwich" condition, the natural
+          n>=2 generalisation of "Cheb-1 of both prey").
+        * Up to n - 1 candidates are stunned, picked in ascending
+          predator agent id order (fully deterministic — no RNG
+          flows through this pass).
+        * Each newly stunned predator has its `stun_remaining` set
+          to `cfg.stun_duration` and its pending intention forced
+          to STAY.
+        * The "sandwichers" — prey from this group at Cheb-1 of any
+          newly stunned predator — are forced to STAY for this
+          step. Other group members are free to act normally.
+
+        Groups are processed in ascending order of their lowest
+        member's agent id, so when multiple groups could claim the
+        same predator the order is reproducible. Predators stunned
+        by an earlier group are skipped by later groups (no double-
+        counting against later groups' n-1 caps either: caps are
+        per-group, candidates are per-group filtered).
+        """
+        alive_prey_by_id = {
+            b.agent_id: b
+            for b in self.env.agent_bodies.values()
+            if b.alive and b.team == au.TEAM_PREY
+        }
+        if len(alive_prey_by_id) < 2:
+            return
+
+        alive_pred_by_id = {
+            b.agent_id: b
+            for b in self.env.agent_bodies.values()
+            if b.alive and b.team == au.TEAM_PREDATOR
+        }
+        if not alive_pred_by_id:
+            return
+
+        # Connected components on prey-prey Chebyshev-1 adjacency.
+        prey_ids = sorted(alive_prey_by_id)
+        adj: Dict[int, List[int]] = {pid: [] for pid in prey_ids}
+        for i, pid1 in enumerate(prey_ids):
+            b1 = alive_prey_by_id[pid1]
+            for pid2 in prey_ids[i + 1:]:
+                b2 = alive_prey_by_id[pid2]
+                if chebyshev(b1.x, b1.y, b2.x, b2.y) <= 1:
+                    adj[pid1].append(pid2)
+                    adj[pid2].append(pid1)
+
+        visited: set[int] = set()
+        groups: List[List[int]] = []
+        for pid in prey_ids:
+            if pid in visited:
+                continue
+            stack = [pid]
+            comp: List[int] = []
+            while stack:
+                cur = stack.pop()
+                if cur in visited:
+                    continue
+                visited.add(cur)
+                comp.append(cur)
+                for nb in adj[cur]:
+                    if nb not in visited:
+                        stack.append(nb)
+            comp.sort()
+            groups.append(comp)
+        groups.sort(key=lambda g: g[0])
+
+        stunned_this_step: set[int] = set()
+        pred_ids_sorted = sorted(alive_pred_by_id)
+
+        for group in groups:
+            n = len(group)
+            if n < 2:
+                continue
+            cap = n - 1
+
+            candidates: List[int] = []
+            for pid_pred in pred_ids_sorted:
+                if pid_pred in stunned_this_step:
+                    continue
+                pb = alive_pred_by_id[pid_pred]
+                if pb.stun_remaining > 0:
+                    continue
+                count = 0
+                for prey_id in group:
+                    pry = alive_prey_by_id[prey_id]
+                    if chebyshev(pb.x, pb.y, pry.x, pry.y) <= 1:
+                        count += 1
+                        if count >= 2:
+                            break
+                if count >= 2:
+                    candidates.append(pid_pred)
+
+            if not candidates:
+                continue
+            chosen = candidates[:cap]
+            for pred_id in chosen:
+                stunned_this_step.add(pred_id)
+                pb = alive_pred_by_id[pred_id]
+                pb.stun_remaining = self.config.stun_duration
+                intentions[pred_id] = au.STAY
+                for prey_id in group:
+                    pry = alive_prey_by_id[prey_id]
+                    if chebyshev(pb.x, pb.y, pry.x, pry.y) <= 1:
+                        intentions[prey_id] = au.STAY
 
     def status_line(self) -> str:
         return f"Timestep {self.step_index}/{self.config.timesteps}  Current Outcome={self.outcome}"
