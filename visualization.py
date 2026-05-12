@@ -17,13 +17,6 @@ GRID_WALL = (35, 35, 40)
 GRID_EMPTY = (210, 210, 215)
 GRID_PRED = (110, 55, 180)
 GRID_PREY = (55, 160, 75)
-# Obstacle colours: unclaimed is neutral light grey; locked obstacles are
-# tinted toward the owning team's colour so the strategic state is visible
-# at a glance.
-OBSTACLE_UNCLAIMED = (150, 150, 155)
-OBSTACLE_PRED_LOCKED = (160, 110, 200)
-OBSTACLE_PREY_LOCKED = (130, 190, 140)
-CARRY_RING = (15, 15, 20)
 ROLE_LETTER_COLOR = (245, 245, 245)
 
 
@@ -37,14 +30,6 @@ def _blit_legend(surface: pygame.Surface, font: pygame.font.Font, x: int, y: int
     pygame.draw.rect(surface, GRID_PREY, (x2, y + 2, sw, sh))
     surface.blit(font.render("Prey", True, fg), (x2 + sw + 6, y))
     return x2 + sw + 6 + font.size("Prey")[0]
-
-
-def _obstacle_color(locked_team: str | None) -> tuple[int, int, int]:
-    if locked_team == au.TEAM_PREDATOR:
-        return OBSTACLE_PRED_LOCKED
-    if locked_team == au.TEAM_PREY:
-        return OBSTACLE_PREY_LOCKED
-    return OBSTACLE_UNCLAIMED
 
 
 def _draw_grid(
@@ -87,29 +72,13 @@ def _draw_grid(
             cy = b.y * CELL + CELL // 2
             grid_surf.blit(label, (cx - lw // 2, cy - lh // 2))
 
-    # Obstacles. Unheld obstacles are coloured by lock state and drawn on
-    # top of any agent that happens to share the cell so the shelter state
-    # stays visible. Held obstacles are shown as a black ring on the carrier.
-    for item in env.obstacles.values():
-        if item.held_by is not None:
-            carrier = env.agent_bodies.get(item.held_by)
-            if carrier is not None and carrier.alive:
-                cx = carrier.x * CELL + CELL // 2
-                cy = carrier.y * CELL + CELL // 2
-                pygame.draw.circle(grid_surf, CARRY_RING, (cx, cy), CELL // 4, 2)
-            continue
-        cx = item.x * CELL + CELL // 2
-        cy = item.y * CELL + CELL // 2
-        pygame.draw.circle(grid_surf, _obstacle_color(item.locked_team), (cx, cy), CELL // 5)
-
     grid_x = max(0, (surface.get_width() - grid_w) // 2)
     surface.blit(grid_surf, (grid_x, MARGIN_TOP))
 
     surface.blit(font.render(status, True, (240, 240, 245)), (PAD_X, 8))
     _blit_legend(surface, font, PAD_X, 34)
     hint_1 = font.render(
-        f"Vision: Chebyshev predator r={vision_radius_predator} and prey r={vision_radius_prey} (square side {2 * vision_radius_predator + 1})  |  "
-        "Obstacles: grey=unclaimed, tinted=team-locked, black ring=carrier",
+        f"Vision: Chebyshev predator r={vision_radius_predator} and prey r={vision_radius_prey}",
         True,
         (170, 170, 180),
     )
@@ -135,8 +104,7 @@ def run_visualization(config: SimulationConfig, num_runs: int = 1) -> None:
         f"Outcome={au.OUTCOME_ONGOING}  |  Seed={config.seed + total_runs - 1}"
     )
     hint_text_1 = (
-        f"Vision: Chebyshev Predator Radius={config.vision_radius_predator} and Prey Radius={config.vision_radius_prey} (square side {2 * config.vision_radius_predator + 1})  |  "
-        "Obstacles: grey=unclaimed, tinted=team-locked, black ring=carrier"
+        f"Vision: Chebyshev Predator Radius={config.vision_radius_predator} and Prey Radius={config.vision_radius_prey}"
     )
     hint_text_2 = "Next timestep: space/right   Auto Run: a   Reset Run: r   Next Run: n   Quit: esc"
     min_header_w = max(font.size(status_sample)[0], font.size(hint_text_1)[0], font.size(hint_text_2)[0]) + PAD_X * 2
