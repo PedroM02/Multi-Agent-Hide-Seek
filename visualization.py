@@ -6,7 +6,12 @@ import pygame
 
 import agent_utils as au
 from environment import Environment
-from simulation import BatchSummary, SimulationConfig, SimulationState
+from simulation import (
+    BatchSummary,
+    SimulationConfig,
+    SimulationState,
+    format_batch_summary,
+)
 
 
 CELL = 36
@@ -147,8 +152,10 @@ def run_visualization(config: SimulationConfig, num_runs: int = 1) -> None:
         summary.total_steps += sim.step_index
         if sim.outcome == au.OUTCOME_PREDATORS_WIN:
             summary.predator_wins += 1
+            summary.predator_win_steps += sim.step_index
         elif sim.outcome == au.OUTCOME_PREY_WIN:
-            summary.prey_timeout_wins += 1
+            summary.prey_wins += 1
+            summary.prey_win_steps += sim.step_index
         print(
             f"run={run_index + 1}/{total_runs}  seed={run_seed}  "
             f"outcome={sim.outcome}  steps={sim.step_index}",
@@ -225,10 +232,4 @@ def run_visualization(config: SimulationConfig, num_runs: int = 1) -> None:
         )
 
     if summary.runs > 0:
-        mean_steps = summary.total_steps / summary.runs
-        print(
-            f"runs={summary.runs}  predator_wins={summary.predator_wins}  "
-            f"prey_timeout_wins={summary.prey_timeout_wins}",
-            flush=True,
-        )
-        print(f"mean_steps={mean_steps:.2f}", flush=True)
+        print(format_batch_summary(summary, config), flush=True)

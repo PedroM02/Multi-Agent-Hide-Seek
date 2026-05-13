@@ -421,12 +421,23 @@ the current one is over, `esc` quits.
 
 The GUI mirrors the headless logging: every time a run finishes it
 prints a one-line summary (`run=i/N  seed=S  outcome=...  steps=K`)
-and on quit it prints the final `runs= predator_wins= prey_timeout_wins=`
-plus `mean_steps=` block, identical in format to the batch runner.
-Closing the window before every run has finished prints an explicit
-`simulation aborted (X/N runs completed)` line before the partial
-summary, so the printed totals never silently misrepresent what
-actually ran.
+and on quit it prints the same final markdown-style table as the
+batch runner. The table is a single data row with seven columns —
+`Number of Predators`, `Number of Prey`, `Predator Wins`,
+`Prey Wins`, `Mean Run Timesteps` (pooled across all runs),
+`Mean Run Timesteps in Predator-won` (mean computed only over
+episodes that ended in a predator win), and `Mean Run Timesteps
+in Prey-won` (same, for prey wins, including kill-mode
+eliminations). The shape is designed for the writeup workflow: run
+many configurations, keep the header from the first command's
+output, and append only the data row from each subsequent
+command's output to build a master comparison table.
+Cells whose underlying count is 0 are left empty so the rendered
+table matches the spreadsheet style of the source document.
+Closing the window before every run has finished prints an
+explicit `simulation aborted (X/N runs completed)` line before
+the partial summary, so the printed totals never silently
+misrepresent what actually ran.
 
 ---
 

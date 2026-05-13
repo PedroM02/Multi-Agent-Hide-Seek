@@ -1,5 +1,5 @@
 from __future__ import annotations
-from simulation import BatchSummary, SimulationConfig, run_batch
+from simulation import BatchSummary, SimulationConfig, format_batch_summary, run_batch
 
 import argparse
 
@@ -70,9 +70,7 @@ def main() -> None:
         return
 
     summary: BatchSummary = run_batch(config, args.runs)
-    mean_steps = summary.total_steps / max(1, summary.runs)
-    print(f"runs={summary.runs}  predator_wins={summary.predator_wins}  prey_timeout_wins={summary.prey_timeout_wins}")
-    print(f"mean_steps={mean_steps:.2f}")
+    print(format_batch_summary(summary, config))
 
 
 if __name__ == "__main__":

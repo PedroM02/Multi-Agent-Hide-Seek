@@ -487,8 +487,17 @@ def run_episode(config: SimulationConfig, rng: random.Random) -> EpisodeSummary:
 class BatchSummary:
     def __init__(self) -> None:
         self.predator_wins = 0
-        self.prey_timeout_wins = 0
+        # Counts every prey-victory episode (timeout OR `--prey-defend
+        # kill` elimination of all predators). The old name
+        # `prey_timeout_wins` was inaccurate after the kill mode
+        # landed.
+        self.prey_wins = 0
         self.total_steps = 0
+        # Per-outcome step totals so the reporter can show "mean
+        # steps among predator wins" vs "mean steps among prey wins"
+        # separately. The pooled mean is still `total_steps / runs`.
+        self.predator_win_steps = 0
+        self.prey_win_steps = 0
         self.runs = 0
 
 
@@ -502,6 +511,64 @@ def run_batch(config: SimulationConfig, num_runs: int) -> BatchSummary:
         acc.total_steps += summary.steps
         if summary.outcome == au.OUTCOME_PREDATORS_WIN:
             acc.predator_wins += 1
+            acc.predator_win_steps += summary.steps
         elif summary.outcome == au.OUTCOME_PREY_WIN:
-            acc.prey_timeout_wins += 1
+            acc.prey_wins += 1
+            acc.prey_win_steps += summary.steps
     return acc
+
+
+def format_batch_summary(summary: BatchSummary, config: SimulationConfig) -> str:
+    """Render a `BatchSummary` as a one-data-row markdown table.
+
+    The layout is designed for the writeup workflow: each command
+    contributes a single row to a master table that aggregates
+    results across many configurations. The function always emits
+    `header + separator + data row`, so the output of a single
+    command is self-describing; when concatenating multiple
+    commands' outputs into one big table, keep the header from the
+    first command and drop the header+separator from every
+    subsequent one (or pipe the output through `Select-Object
+    -Last 1` / `tail -n 1` to get just the data row).
+
+    Columns mirror the visualisation the user works from:
+
+    | Number of Predators | Number of Prey | Predator Wins | Prey Wins
+      | Mean Run Timesteps | Mean Run Timesteps in Predator-won
+      | Mean Run Timesteps in Prey-won |
+
+    Means are formatted with two decimals. Cells whose underlying
+    count is 0 (e.g. `predator_wins == 0`) render as an empty cell
+    rather than `n/a` to match the visual style of the source
+    spreadsheet — markdown renderers display them as blank.
+    """
+    def fmt_mean(total: int, count: int) -> str:
+        if count <= 0:
+            return ""
+        return f"{total / count:.2f}"
+
+    header_cells = [
+        ("Number of Predators", 19),
+        ("Number of Prey", 14),
+        ("Predator Wins", 13),
+        ("Prey Wins", 9),
+        ("Mean Run Timesteps", 18),
+        ("Mean Run Timesteps in Predator-won", 34),
+        ("Mean Run Timesteps in Prey-won", 30),
+    ]
+    data_cells = [
+        str(config.num_predators),
+        str(config.num_prey),
+        str(summary.predator_wins),
+        str(summary.prey_wins),
+        fmt_mean(summary.total_steps, summary.runs),
+        fmt_mean(summary.predator_win_steps, summary.predator_wins),
+        fmt_mean(summary.prey_win_steps, summary.prey_wins),
+    ]
+
+    header = "| " + " | ".join(label for label, _w in header_cells) + " |"
+    sep = "| " + " | ".join("-" * w for _label, w in header_cells) + " |"
+    row = "| " + " | ".join(
+        f"{value:>{w}}" for value, (_label, w) in zip(data_cells, header_cells)
+    ) + " |"
+    return "\n".join([header, sep, row])
