@@ -3,10 +3,9 @@
 A grid-world predator-prey simulation built as a small multi-agent
 system. Predators (purple) chase prey (green); prey try to escape until
 the timestep budget runs out. Both teams have partial information and
-optional intra-team communication. A team-level role selector sits in
-the per-step pipeline as the hook for future hunting / protection
-strategies; right now it simply tags predators as `CHASER` and prey as
-`FLEE`.
+optional intra-team communication. Predator behavior is selected with
+`--mode` (see "Predator behavior levels"); a team-level role selector
+is reserved for Level 4 (`--mode roles`, not implemented yet).
 
 The codebase favours readability over performance: the per-step pipeline
 is explicit, every public field is small and documented, and behaviour
@@ -206,6 +205,25 @@ the prey survives.
 
 ---
 
+## Predator behavior levels
+
+Predator complexity is controlled by `--mode` and optional `--comms`.
+Prey behavior is unchanged across levels (flee, optional stun/kill).
+
+| Level | `--mode` | `--comms` | Roles | Predator behavior |
+|-------|----------|-----------|-------|-------------------|
+| 1 | `random` | off | none | Uniform random over `legal_actions` each step |
+| 2 | `chase` | off | none | Greedy Manhattan pursuit (`DecisionMaking._chase`) |
+| 3 | `chase` | `predators` / `both` | none | Same chase as Level 2; teammate enemy reports augment perception |
+| 4 | `roles` (future) | TBD | enabled | Coordinated roles (not implemented) |
+| 5–6 | TBD | TBD | TBD | MARL / optimal baselines (not implemented) |
+
+Levels 1–3 draw **no role letters** in the GUI (`Agent.role` stays `None`).
+Chase logic is unchanged in Levels 2–3; only the role label and assignment
+layer are removed until Level 4.
+
+---
+
 ## Perception, memory and team communication
 
 The per-step pipeline lives in [`simulation.py`](simulation.py)
@@ -215,7 +233,7 @@ The per-step pipeline lives in [`simulation.py`](simulation.py)
    [`observation_definition.py`](observation_definition.py): its own
    cell, legal actions, vision radius, visible enemies and visible
    allies.
-2. **Team comms** (optional, opt-in via `--comms {prey,predator,predators,both}`).
+2. **Team comms** (optional, opt-in via `--comms {prey,predators,both}`).
    Omit the flag for no comms (default). When set, only agents on the
    enabled team(s) broadcast and fuse teammate reports; the other team
    behaves as if comms were off (direct sight + memory only). There is
@@ -244,16 +262,14 @@ The per-step pipeline lives in [`simulation.py`](simulation.py)
    memory is refreshed via
    [`Perception.update_last_seen_enemy`](perception.py) — the fresher
    signal (own eyes or a teammate's eyes) wipes out any older memory.
-4. **Role assignment.** The team role selector runs once per team and
-   writes a `(role, role_target)` onto every Agent. The current
-   selector is trivial — predators always get `ROLE_CHASER`, prey
-   always get `ROLE_FLEE` — and exists as the hook for the next round
-   of hunting / protection strategies (see "Roles" below).
+4. **Role assignment** (Level 4 only, `--mode roles`). Skipped for
+   Levels 1–3; agents keep `role=None`. When enabled, the team role
+   selector writes `(role, role_target)` onto every Agent (see "Roles").
 5. **Per-agent decision.** Each agent's `Agent.decide` calls
    `DecisionMaking.choose_action` with the comms-augmented obs plus
-   `last_seen_enemy`. `choose_action` currently dispatches on team
-   alone (predators chase, prey flee). The chosen action goes back to
-   action resolution.
+   `last_seen_enemy`. Predators dispatch on `--mode` (`random` or
+   `chase`); prey always flee. The chosen action goes back to action
+   resolution.
 6. **Knockout system** (optional, opt-in via
    `--prey-defend {stun,kill}`). Sits between decisions and the
    resolver. Two phases:
@@ -285,22 +301,20 @@ rest of the pipeline is unchanged.
 
 ## Roles
 
-Roles are written every step by
-[`decision_making.select_team_roles`](decision_making.py) onto each
-`Agent` (`agent.role`, `agent.role_target`) and threaded into the per-
-agent observation so the decision layer can dispatch on them. Two
-roles are currently defined:
+Roles are **inactive** for Levels 1–3 (`--mode random` or `chase`).
+The GUI shows team color only — no `C`/`F` letters.
+
+When Level 4 lands (`--mode roles`), [`decision_making.select_team_roles`](decision_making.py)
+will run each step and thread `(role, role_target)` into observations.
+The initial taxonomy (predators `ROLE_CHASER`, prey `ROLE_FLEE`) is
+preserved in code for that mode:
 
 | Role | Team | Per-step behaviour |
 |------|------|--------------------|
-| `ROLE_CHASER` | predator | Greedy min-Manhattan chase against the closest target in `active_enemies`, falling back to `last_seen_enemy` when no enemy is visible. Stale memory at ego's cell is wiped and the agent explores. |
-| `ROLE_FLEE` | prey | Head away from the primary threat (the Manhattan-closest tracked predator) while avoiding cardinal moves that close distance to any other tracked predator. Same `last_seen_enemy` semantics as the chaser. See "Prey flee scoring" below for the exact selection rule. |
+| `ROLE_CHASER` | predator | Greedy min-Manhattan chase (same as `--mode chase`) |
+| `ROLE_FLEE` | prey | Flee scoring below |
 
-The selector and `choose_action` are deliberately small right now: the
-role API (function shape, sticky `role_target`, role letters in the
-GUI) is preserved so a richer taxonomy of hunting / protection
-strategies can be reintroduced without re-plumbing the per-step
-pipeline.
+Levels 2–3 use `_chase` / `_flee` directly without going through roles.
 
 ### Prey flee scoring
 
@@ -463,7 +477,8 @@ All flags are kebab-case; full list available via `python main.py --help`.
 | `--prey N` | 1 | Number of prey per run |
 | `--walls N` | 2 | Random wall segments to generate |
 | `--wall-size N` | 2 | Length of each generated wall segment |
-| `--comms {prey,predator,predators,both}` | off | Enable speaker-centric, single-hop intra-team communication for the given team(s); omit for none |
+| `--mode {random,chase}` | `chase` | Predator decision mode (Level 1 random / Level 2 chase; see "Predator behavior levels") |
+| `--comms {prey,predators,both}` | off | Enable speaker-centric, single-hop intra-team communication for the given team(s); omit for none |
 | `--prey-defend {stun,kill}` | off | Enable the cooperative-knockout mechanic. Groups of Cheb-1 prey defeat up to `n-1` sandwiched predators per step (sandwicher prey are forced to STAY that step). `stun` freezes the predator for 3 steps; `kill` removes it from the run and ends the episode early once every predator is gone. See "Prey-defend (cooperative knockout)" above. |
 
 Determinism: a given `(seed, run index, all other flags)` reproduces

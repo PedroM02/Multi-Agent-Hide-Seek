@@ -75,7 +75,11 @@ def comms_enabled_for_team(config: SimulationConfig, team: str) -> bool:
         return False
     if mode == "both":
         return True
-    return mode == team
+    if mode == "predators":
+        return team == au.TEAM_PREDATOR
+    if mode == "prey":
+        return team == au.TEAM_PREY
+    return False
 
 
 def _exchange_team_messages(
@@ -130,7 +134,7 @@ class SimulationConfig:
         self.num_walls: int = 0
         self.wall_size: int = 3
         # Intra-team communication mode. None = disabled (default).
-        # "prey" | "predator" | "both" — see comms_enabled_for_team.
+        # "prey" | "predators" | "both" — see comms_enabled_for_team.
         self.comms: Optional[str] = None
         # Cooperative-knockout (prey-defend) mechanic. When enabled,
         # groups of Chebyshev-adjacent prey can defeat predators that
@@ -143,6 +147,9 @@ class SimulationConfig:
         # See `SimulationState._resolve_knockouts` for the full rules.
         self.prey_defend: Optional[str] = None
         self.stun_duration: int = 3
+        # Predator decision mode: "random" (L1) or "chase" (L2/L3 default).
+        # Level 4 will add "roles".
+        self.mode: str = au.MODE_CHASE
 
 
 def copy_config(base: SimulationConfig, **overrides) -> SimulationConfig:
@@ -161,6 +168,7 @@ def copy_config(base: SimulationConfig, **overrides) -> SimulationConfig:
     c.comms = base.comms
     c.prey_defend = base.prey_defend
     c.stun_duration = base.stun_duration
+    c.mode = base.mode
     for k, v in overrides.items():
         setattr(c, k, v)
     return c
@@ -210,7 +218,7 @@ class SimulationState:
             self.config.num_prey,
             self.rng,
         )
-        self.agents = build_agents_for_env(self.env, self.rng)
+        self.agents = build_agents_for_env(self.env, self.rng, self.config)
         for a in self.agents:
             a.reset_memory()
         self.step_index = 0
@@ -259,23 +267,26 @@ class SimulationState:
             )
             agents_by_id[aid].prepare_observation(obs, reports)
 
-        # Phase 2c: per-team role assignment. The selector currently
-        # reduces to "predators -> CHASER, prey -> FLEE" and is kept as
-        # the single hook for future hunting / protection strategies.
-        # Roles + role_target are written back onto each Agent and
-        # threaded into the obs so a richer choose_action can dispatch
-        # on them later without further plumbing.
-        for team in (au.TEAM_PREDATOR, au.TEAM_PREY):
-            team_ids = [
-                aid for aid, ob in raw_obs.items() if ob["team"] == team
-            ]
-            assignments = select_team_roles(
-                team, team_ids, raw_obs, agents_by_id, self.env,
-            )
-            for aid, (role, target) in assignments.items():
+        # Phase 2c: per-team role assignment (Level 4 only, `--mode roles`).
+        # Levels 1–3 skip roles; agents keep role=None and the GUI draws
+        # no letter. Chase/random behavior lives in DecisionMaking.
+        if au.roles_enabled(self.config.mode):
+            for team in (au.TEAM_PREDATOR, au.TEAM_PREY):
+                team_ids = [
+                    aid for aid, ob in raw_obs.items() if ob["team"] == team
+                ]
+                assignments = select_team_roles(
+                    team, team_ids, raw_obs, agents_by_id, self.env,
+                )
+                for aid, (role, target) in assignments.items():
+                    a = agents_by_id[aid]
+                    a.role = role
+                    a.role_target = target
+        else:
+            for aid in raw_obs:
                 a = agents_by_id[aid]
-                a.role = role
-                a.role_target = target
+                a.role = None
+                a.role_target = None
 
         # Phase 3: agents decide using direct sightings, then teammate
         # reports, then their own memory — now within their assigned role.

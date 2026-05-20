@@ -32,6 +32,16 @@ def main() -> None:
     parser.add_argument("--walls", type=int, default=2, dest="num_walls", help="Number of wall segments to generate randomly.",)
     parser.add_argument("--wall-size", type=int, default=2, dest="wall_size", help="Length (in cells) of each randomly generated wall segment.",)
     parser.add_argument(
+        "--mode",
+        choices=["random", "chase"],
+        default="chase",
+        help=(
+            "Predator decision mode. random: Level 1 (uniform over legal "
+            "actions). chase: Level 2 greedy pursuit; add --comms for "
+            "Level 3. Roles are off in both; Level 4 will add --mode roles."
+        ),
+    )
+    parser.add_argument(
         "--comms",
         choices=["prey", "predators", "both"],
         default=None,
@@ -72,6 +82,7 @@ def main() -> None:
     config.seed = args.seed
     config.num_walls = args.num_walls
     config.wall_size = args.wall_size
+    config.mode = args.mode
     config.comms = args.comms
     config.prey_defend = args.prey_defend
 

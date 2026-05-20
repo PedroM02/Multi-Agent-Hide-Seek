@@ -75,18 +75,19 @@ def _draw_grid(
         pygame.draw.rect(grid_surf, col, rect, border_radius=4)
 
         a = agent_by_id.get(b.agent_id)
-        if a is not None:
-            letter = au.ROLE_LETTER.get(a.role, "?")
-            letter_color = (
-                tuple(c // 2 for c in ROLE_LETTER_COLOR)
-                if stunned
-                else ROLE_LETTER_COLOR
-            )
-            label = font.render(letter, True, letter_color)
-            lw, lh = label.get_size()
-            cx = b.x * CELL + CELL // 2
-            cy = b.y * CELL + CELL // 2
-            grid_surf.blit(label, (cx - lw // 2, cy - lh // 2))
+        if a is not None and a.role is not None:
+            letter = au.ROLE_LETTER.get(a.role)
+            if letter is not None:
+                letter_color = (
+                    tuple(c // 2 for c in ROLE_LETTER_COLOR)
+                    if stunned
+                    else ROLE_LETTER_COLOR
+                )
+                label = font.render(letter, True, letter_color)
+                lw, lh = label.get_size()
+                cx = b.x * CELL + CELL // 2
+                cy = b.y * CELL + CELL // 2
+                grid_surf.blit(label, (cx - lw // 2, cy - lh // 2))
 
     grid_x = max(0, (surface.get_width() - grid_w) // 2)
     surface.blit(grid_surf, (grid_x, MARGIN_TOP))

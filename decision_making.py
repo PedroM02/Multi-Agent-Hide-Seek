@@ -51,8 +51,9 @@ def select_team_roles(
 
 
 class DecisionMaking:
-    def __init__(self, rng: random.Random) -> None:
+    def __init__(self, rng: random.Random, mode: str = au.MODE_CHASE) -> None:
         self._rng = rng
+        self._mode = mode
 
     def choose_action(
         self,
@@ -70,8 +71,14 @@ class DecisionMaking:
             return au.STAY, False
 
         if obs["team"] == au.TEAM_PREDATOR:
+            if self._mode == au.MODE_RANDOM:
+                return self._random_move(legal), False
             return self._chase(obs, last_seen_enemy, legal)
         return self._flee(obs, last_seen_enemy, legal)
+
+    def _random_move(self, legal: List[str]) -> str:
+        """Level 1: uniform random over legal actions (ignores perception)."""
+        return self._rng.choice(legal)
 
     def _chase(
         self,

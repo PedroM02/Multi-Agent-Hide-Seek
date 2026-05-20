@@ -26,12 +26,12 @@ class Agent:
         # Role assignment is written by the team role selector each step
         # (see simulation.step_once). The role_target is sticky between
         # selector calls when still valid; the selector itself preserves it.
-        self.role: str = au.ROLE_CHASER if team == au.TEAM_PREDATOR else au.ROLE_FLEE
+        self.role: str | None = None
         self.role_target: tuple[int, int] | None = None
 
     def reset_memory(self) -> None:
         self.last_seen_enemy = None
-        self.role = au.ROLE_CHASER if self.team == au.TEAM_PREDATOR else au.ROLE_FLEE
+        self.role = None
         self.role_target = None
 
     def prepare_observation(
@@ -75,7 +75,7 @@ class Agent:
         return action
 
 
-def build_agents_for_env(env, rng: random.Random) -> list[Agent]:
+def build_agents_for_env(env, rng: random.Random, config) -> list[Agent]:
     shared_perception = Perception()
     agents: list[Agent] = []
     for body in sorted(env.agent_bodies.values(), key=lambda b: b.agent_id):
@@ -85,12 +85,17 @@ def build_agents_for_env(env, rng: random.Random) -> list[Agent]:
         # independent streams so tiebreak draws can't bias action choice.
         decision_seed = rng.randint(0, 2**31)
         perception_seed = rng.randint(0, 2**31)
+        decision_mode = (
+            config.mode if body.team == au.TEAM_PREDATOR else au.MODE_CHASE
+        )
         agents.append(
             Agent(
                 agent_id=body.agent_id,
                 team=body.team,
                 perception=shared_perception,
-                decision=DecisionMaking(random.Random(decision_seed)),
+                decision=DecisionMaking(
+                    random.Random(decision_seed), mode=decision_mode,
+                ),
                 rng=random.Random(perception_seed),
             )
         )

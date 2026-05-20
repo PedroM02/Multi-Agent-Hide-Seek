@@ -29,10 +29,13 @@ OUTCOME_PREDATORS_WIN = "Predators Win"
 OUTCOME_PREY_WIN = "Prey Win"
 
 
-# Agent roles. Currently only the two defaults (predators chase, prey
-# flee) are wired into the team role selector — see
-# `decision_making.select_team_roles`. Additional roles (hunting and
-# protection variants) will be added back as the selector grows.
+# Predator decision modes (levels 1–3 use random/chase; level 4+ TBD).
+MODE_RANDOM = "random"
+MODE_CHASE = "chase"
+MODE_ROLES = "roles"  # Level 4 — not in CLI yet
+
+# Agent roles. Active only when `--mode roles` (Level 4). Levels 1–3
+# leave `Agent.role` as None and draw no GUI letter.
 ROLE_CHASER = "chaser"
 ROLE_FLEE = "flee"
 
@@ -40,3 +43,8 @@ ROLE_LETTER = {
     ROLE_CHASER: "C",
     ROLE_FLEE: "F",
 }
+
+
+def roles_enabled(mode: str) -> bool:
+    """True when the simulation should run the team role selector."""
+    return mode == MODE_ROLES
