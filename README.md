@@ -215,10 +215,14 @@ The per-step pipeline lives in [`simulation.py`](simulation.py)
    [`observation_definition.py`](observation_definition.py): its own
    cell, legal actions, vision radius, visible enemies and visible
    allies.
-2. **Team comms** (optional, opt-in via `--comms`). Each speaker
-   broadcasts its directly-visible enemies to the teammates inside its
-   own vision radius (the `visible_allies` it currently sees). Comms
-   are single-hop, synchronous, and speaker-centric — see
+2. **Team comms** (optional, opt-in via `--comms {prey,predator,predators,both}`).
+   Omit the flag for no comms (default). When set, only agents on the
+   enabled team(s) broadcast and fuse teammate reports; the other team
+   behaves as if comms were off (direct sight + memory only). There is
+   no cross-team messaging. Each enabled speaker broadcasts its
+   directly-visible enemies to the teammates inside its own vision radius
+   (the `visible_allies` it currently sees). Comms are single-hop,
+   synchronous, and speaker-centric — see
    [`simulation._exchange_team_messages`](simulation.py). The fan-out
    means a receiver may know about an enemy slightly outside its own
    square, but only when a teammate literally sees the enemy *this
@@ -459,7 +463,7 @@ All flags are kebab-case; full list available via `python main.py --help`.
 | `--prey N` | 1 | Number of prey per run |
 | `--walls N` | 2 | Random wall segments to generate |
 | `--wall-size N` | 2 | Length of each generated wall segment |
-| `--comms` | off | Enable speaker-centric, single-hop team communication |
+| `--comms {prey,predator,predators,both}` | off | Enable speaker-centric, single-hop intra-team communication for the given team(s); omit for none |
 | `--prey-defend {stun,kill}` | off | Enable the cooperative-knockout mechanic. Groups of Cheb-1 prey defeat up to `n-1` sandwiched predators per step (sandwicher prey are forced to STAY that step). `stun` freezes the predator for 3 steps; `kill` removes it from the run and ends the episode early once every predator is gone. See "Prey-defend (cooperative knockout)" above. |
 
 Determinism: a given `(seed, run index, all other flags)` reproduces

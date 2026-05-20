@@ -68,19 +68,33 @@ def generate_walls(
     return result
 
 
+def comms_enabled_for_team(config: SimulationConfig, team: str) -> bool:
+    """True when `config.comms` enables intra-team messaging for `team`."""
+    mode = config.comms
+    if mode is None:
+        return False
+    if mode == "both":
+        return True
+    return mode == team
+
+
 def _exchange_team_messages(
     raw_obs: Dict[int, dict],
+    config: SimulationConfig,
 ) -> Dict[int, Tuple[Tuple[int, int, int], ...]]:
     """Speaker-centric, single-hop, synchronous team comms.
 
-    Every agent broadcasts the enemies it directly sees this step to the
-    teammates inside its own vision radius (its visible_allies). The
-    receiver collects everything it was told, deduped by enemy_id, sorted
-    deterministically. The receiver's own direct sightings are not
-    filtered out here — priority handling lives in Agent.decide.
+    Every agent on a comms-enabled team broadcasts the enemies it directly
+    sees this step to the teammates inside its own vision radius (its
+    visible_allies). The receiver collects everything it was told, deduped
+    by enemy_id, sorted deterministically. The receiver's own direct
+    sightings are not filtered out here — priority handling lives in
+    Agent.decide. Agents on teams with comms disabled do not send.
     """
     shared: Dict[int, list] = {aid: [] for aid in raw_obs}
     for sender_obs in raw_obs.values():
+        if not comms_enabled_for_team(config, sender_obs["team"]):
+            continue
         sightings = sender_obs["visible_enemies"]
         if not sightings:
             continue
@@ -115,7 +129,9 @@ class SimulationConfig:
         self.walls: Optional[Sequence[Tuple[int, int]]] = None
         self.num_walls: int = 0
         self.wall_size: int = 3
-        self.enable_comms: bool = False
+        # Intra-team communication mode. None = disabled (default).
+        # "prey" | "predator" | "both" — see comms_enabled_for_team.
+        self.comms: Optional[str] = None
         # Cooperative-knockout (prey-defend) mechanic. When enabled,
         # groups of Chebyshev-adjacent prey can defeat predators that
         # are Chebyshev-1 of >=2 group members. Two modes:
@@ -142,7 +158,7 @@ def copy_config(base: SimulationConfig, **overrides) -> SimulationConfig:
     c.walls = base.walls
     c.num_walls = base.num_walls
     c.wall_size = base.wall_size
-    c.enable_comms = base.enable_comms
+    c.comms = base.comms
     c.prey_defend = base.prey_defend
     c.stun_duration = base.stun_duration
     for k, v in overrides.items():
@@ -221,12 +237,10 @@ class SimulationState:
             )
 
         # Phase 2: synchronous, single-hop, speaker-centric team comms.
-        # Every agent broadcasts its directly-visible enemies to teammates
-        # within its own vision radius (i.e. its visible_allies). Skipped
-        # entirely when comms are disabled, so receivers see empty reports
-        # and Agent.decide collapses to direct-sight + memory.
-        if self.config.enable_comms:
-            shared_enemies = _exchange_team_messages(raw_obs)
+        # Only agents on comms-enabled teams broadcast; receivers on
+        # disabled teams always get empty reports (direct sight + memory).
+        if self.config.comms is not None:
+            shared_enemies = _exchange_team_messages(raw_obs, self.config)
         else:
             shared_enemies = {aid: tuple() for aid in raw_obs}
 
@@ -238,7 +252,12 @@ class SimulationState:
         # the agent "knows".
         agents_by_id = {a.agent_id: a for a in self.agents}
         for aid, obs in raw_obs.items():
-            agents_by_id[aid].prepare_observation(obs, shared_enemies[aid])
+            reports = (
+                shared_enemies[aid]
+                if comms_enabled_for_team(self.config, obs["team"])
+                else tuple()
+            )
+            agents_by_id[aid].prepare_observation(obs, reports)
 
         # Phase 2c: per-team role assignment. The selector currently
         # reduces to "predators -> CHASER, prey -> FLEE" and is kept as

@@ -31,7 +31,19 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--walls", type=int, default=2, dest="num_walls", help="Number of wall segments to generate randomly.",)
     parser.add_argument("--wall-size", type=int, default=2, dest="wall_size", help="Length (in cells) of each randomly generated wall segment.",)
-    parser.add_argument("--comms", action="store_true", help="Enable team communications (opt-in). Each agent broadcasts directly-visible enemies to teammates inside its vision radius; receivers fall back from direct sight to teammate reports to memory.",)
+    parser.add_argument(
+        "--comms",
+        choices=["prey", "predators", "both"],
+        default=None,
+        metavar="TEAM",
+        help=(
+            "Enable intra-team communication for the given team(s). "
+            "Each enabled agent broadcasts directly-visible enemies to "
+            "teammates inside its vision radius; receivers fall back from "
+            "direct sight to teammate reports to memory. Values: prey, "
+            "predators, both. Omit the flag for no comms."
+        ),
+    )
     parser.add_argument(
         "--prey-defend",
         choices=["stun", "kill"],
@@ -60,7 +72,7 @@ def main() -> None:
     config.seed = args.seed
     config.num_walls = args.num_walls
     config.wall_size = args.wall_size
-    config.enable_comms = args.comms
+    config.comms = args.comms
     config.prey_defend = args.prey_defend
 
     if args.gui:
