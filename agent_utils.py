@@ -32,7 +32,7 @@ OUTCOME_PREY_WIN = "Prey Win"
 # Predator decision modes
 MODE_RANDOM = "random"
 MODE_CHASE = "chase"
-MODE_ROLES = "roles"  # Level 4 — not in CLI yet
+MODE_ROLES = "roles"
 MODE_OPTIMAL = "optimal"
 
 # Agent roles. Active only when mode is "roles"
