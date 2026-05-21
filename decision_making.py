@@ -137,8 +137,6 @@ def select_pack_prey_id(
 # Team-level role selector. Currently trivial; kept as the entry point
 # for future hunting / protection strategies.
 # ---------------------------------------------------------------------------
-
-
 def select_team_roles(
     team,
     team_ids,
@@ -148,16 +146,85 @@ def select_team_roles(
 ):
     """Assign (role, role_target) to every alive agent in `team`.
 
-    Currently trivial: predators all become CHASER, prey all become FLEE.
-    The function is kept as the single hook for future role logic — when
-    a richer role taxonomy is reintroduced it slots in here and
-    `DecisionMaking.choose_action` learns to dispatch on it.
+    Prey become FLEE. Predators become CHASER, with non-chasing
+    teammates assigned FLANKER positions when the pack has multiple
+    members and shared prey visibility. Only called in `--mode roles`.
     """
     if not team_ids:
         return {}
-    if team == au.TEAM_PREDATOR:
-        return {agent_id: (au.ROLE_CHASER, None) for agent_id in team_ids}
-    return {agent_id: (au.ROLE_FLEE, None) for agent_id in team_ids}
+    if team == au.TEAM_PREY:
+        return {aid: (au.ROLE_FLEE, None) for aid in team_ids}
+    if len(team_ids) < 2:
+        return {aid: (au.ROLE_CHASER, None) for aid in team_ids}
+
+    # collect all prey positions visible to any predator on the team
+    visible_prey = []
+    for aid in team_ids:
+        for ex, ey, _ in obs_by_id[aid]["active_enemies"]:
+            if (ex, ey) not in visible_prey:
+                visible_prey.append((ex, ey))
+
+    # if no predator can see any prey, everyone wanders as chaser
+    if not visible_prey:
+        return {aid: (au.ROLE_CHASER, None) for aid in team_ids}
+    
+    # find closest predator-prey pair
+    best_dist = float("inf")
+    chaser_id = team_ids[0]
+    chase_target = visible_prey[0]
+
+    for aid in team_ids:
+        body = env.agent_bodies[aid]
+        for px, py in visible_prey:
+            d = manhattan(body.x, body.y, px, py)
+            if d < best_dist:
+                best_dist = d
+                chaser_id = aid
+                chase_target = (px, py)
+
+    # assign roles
+    result = {}
+    used_flank_options = []
+    for aid in team_ids:
+        if aid == chaser_id:
+            result[aid] = (au.ROLE_CHASER, chase_target)
+        else:
+            # only assign flanker target if this predator can see the prey
+            can_see_prey = any(
+                (ex, ey) == chase_target
+                for ex, ey, _ in obs_by_id[aid]["active_enemies"]
+            )
+            if not can_see_prey:
+                result[aid] = (au.ROLE_CHASER, None)  # wanders
+                continue
+            chaser_body = env.agent_bodies[chaser_id]
+            body = env.agent_bodies[aid]
+            px, py = chase_target
+            dx = px - chaser_body.x
+            dy = py - chaser_body.y
+            perp_x, perp_y = -dy, dx
+
+            option1 = (max(0, min(env.width - 1, px + perp_x)), max(0, min(env.height - 1, py + perp_y)))
+            option2 = (max(0, min(env.width - 1, px - perp_x)), max(0, min(env.height - 1, py - perp_y)))
+
+            # pick the closer option that hasn't been taken by another flanker
+            d1 = manhattan(body.x, body.y, option1[0], option1[1])
+            d2 = manhattan(body.x, body.y, option2[0], option2[1])
+
+            if option1 not in used_flank_options and option2 not in used_flank_options:
+                # both free — pick closer one
+                chosen = option1 if d1 <= d2 else option2
+            elif option1 in used_flank_options:
+                chosen = option2
+            elif option2 in used_flank_options:
+                chosen = option1
+            else:
+                # both taken (unlikely but safe fallback)
+                chosen = option1 if d1 <= d2 else option2
+
+            used_flank_options.append(chosen)
+            result[aid] = (au.ROLE_FLANKER, chosen)
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -186,6 +253,8 @@ class DecisionMaking:
                 return self._random_move(legal), False
             if self.mode == au.MODE_OPTIMAL:
                 return self._optimal(obs, legal), False
+            if self.mode == au.MODE_ROLES and obs.get("role") == au.ROLE_FLANKER:
+                return self._flank(obs, legal)
             return self._chase(obs, last_seen_enemy, legal)
         return self._flee(obs, last_seen_enemy, legal)
 
@@ -229,6 +298,20 @@ class DecisionMaking:
         target_x, target_y = target
         if stale and agent_x == target_x and agent_y == target_y:
             return self.rng.choice(legal), True
+        return self._navigate_to(agent_x, agent_y, target_x, target_y, legal), False
+
+    def _flank(self, obs, legal):
+        role_target = obs.get("role_target")
+        agent_x, agent_y = obs["agent_x"], obs["agent_y"]
+
+        if role_target is None:
+            return self._chase(obs, None, legal)
+
+        target_x, target_y = role_target
+        # if we reached the flank position, stay put and wait
+        if agent_x == target_x and agent_y == target_y:
+            return au.STAY, False
+
         return self._navigate_to(agent_x, agent_y, target_x, target_y, legal), False
 
     def _flee(self, obs, last_seen_enemy, legal):

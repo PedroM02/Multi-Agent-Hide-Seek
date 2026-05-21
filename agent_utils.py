@@ -38,8 +38,10 @@ MODE_OPTIMAL = "optimal"
 # Agent roles. Active only when mode is "roles"
 ROLE_CHASER = "chaser"
 ROLE_FLEE = "flee"
+ROLE_FLANKER = "flanker"
 
 ROLE_LETTER = {
     ROLE_CHASER: "C",
     ROLE_FLEE: "F",
+    ROLE_FLANKER: "K",
 }
