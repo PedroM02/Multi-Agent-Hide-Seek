@@ -29,10 +29,11 @@ OUTCOME_PREDATORS_WIN = "Predators Win"
 OUTCOME_PREY_WIN = "Prey Win"
 
 
-# Predator decision modes (levels 1–3 use random/chase; level 4+ TBD).
+# Predator decision modes.
 MODE_RANDOM = "random"
 MODE_CHASE = "chase"
 MODE_ROLES = "roles"  # Level 4 — not in CLI yet
+MODE_OPTIMAL = "optimal"
 
 # Agent roles. Active only when `--mode roles` (Level 4). Levels 1–3
 # leave `Agent.role` as None and draw no GUI letter.

@@ -6,7 +6,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 import agent_utils as au
 from action_resolution import resolve_actions
 from agent import Agent, build_agents_for_env
-from decision_making import select_team_roles
+from decision_making import select_pack_prey_id, select_team_roles
 from distances import chebyshev
 from environment import Environment
 from observation_definition import build_observation
@@ -82,6 +82,16 @@ def comms_enabled_for_team(config: SimulationConfig, team: str) -> bool:
     return False
 
 
+def _alive_oracle_prey(env: Environment) -> Tuple[Tuple[int, int, int], ...]:
+    """True positions of all alive prey (Level 6 oracle channel)."""
+    prey: List[Tuple[int, int, int]] = []
+    for body in env.agent_bodies.values():
+        if body.alive and body.team == au.TEAM_PREY:
+            prey.append((body.x, body.y, body.agent_id))
+    prey.sort(key=lambda t: (t[2], t[0], t[1]))
+    return tuple(prey)
+
+
 def _exchange_team_messages(
     raw_obs: Dict[int, dict],
     config: SimulationConfig,
@@ -147,8 +157,7 @@ class SimulationConfig:
         # See `SimulationState._resolve_knockouts` for the full rules.
         self.prey_defend: Optional[str] = None
         self.stun_duration: int = 3
-        # Predator decision mode: "random" (L1) or "chase" (L2/L3 default).
-        # Level 4 will add "roles".
+        # Predator decision mode — see agent_utils.MODE_*.
         self.mode: str = au.MODE_CHASE
 
 
@@ -224,6 +233,45 @@ class SimulationState:
         self.step_index = 0
         self.outcome = au.OUTCOME_ONGOING
         self.cumulative_rewards = {bid: 0.0 for bid in self.env.agent_bodies}
+        self._pack_focus_prey_id: Optional[int] = None
+
+    def _inject_oracle_obs(self, raw_obs: Dict[int, dict]) -> None:
+        """Level 6: clairvoyant prey positions + optional shared pack target."""
+        if self.config.mode != au.MODE_OPTIMAL:
+            return
+
+        oracle = _alive_oracle_prey(self.env)
+        walls = set(self.env.wall_cells)
+        w, h = self.env.width, self.env.height
+
+        predator_positions: List[Tuple[int, int]] = []
+        for obs in raw_obs.values():
+            if obs["team"] == au.TEAM_PREDATOR:
+                predator_positions.append((obs["ego_x"], obs["ego_y"]))
+
+        pack_target: Optional[Tuple[int, int]] = None
+        alive_ids = {pid for _, _, pid in oracle}
+        if self._pack_focus_prey_id not in alive_ids:
+            self._pack_focus_prey_id = None
+        if oracle and self._pack_focus_prey_id is None:
+            self._pack_focus_prey_id = select_pack_prey_id(
+                predator_positions, oracle, w, h, walls,
+            )
+        if self._pack_focus_prey_id is not None:
+            for px, py, pid in oracle:
+                if pid == self._pack_focus_prey_id:
+                    pack_target = (px, py)
+                    break
+
+        for obs in raw_obs.values():
+            if obs["team"] != au.TEAM_PREDATOR:
+                continue
+            obs["oracle_prey"] = oracle
+            obs["wall_cells"] = walls
+            obs["grid_width"] = w
+            obs["grid_height"] = h
+            if pack_target is not None:
+                obs["pack_target"] = pack_target
 
     def step_once(self) -> bool:
         if self.outcome != au.OUTCOME_ONGOING:
@@ -266,6 +314,9 @@ class SimulationState:
                 else tuple()
             )
             agents_by_id[aid].prepare_observation(obs, reports)
+
+        # Phase 2.5: oracle fields for Level 6 optimal modes.
+        self._inject_oracle_obs(raw_obs)
 
         # Phase 2c: per-team role assignment (Level 4 only, `--mode roles`).
         # Levels 1–3 skip roles; agents keep role=None and the GUI draws

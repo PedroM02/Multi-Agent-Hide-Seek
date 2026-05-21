@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import random
-from typing import Any, Dict, List, Optional, Tuple
+from collections import deque
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 import agent_utils as au
-from distances import chebyshev, manhattan
+from distances import bfs_distance, chebyshev, manhattan
 from environment import Environment
+
+Coord = Tuple[int, int]
 
 
 # ---------------------------------------------------------------------------
@@ -16,6 +19,131 @@ from environment import Environment
 def _apply_action(x: int, y: int, action: str) -> Tuple[int, int]:
     dx, dy = au.ACTION_DELTA[action]
     return x + dx, y + dy
+
+
+# ---------------------------------------------------------------------------
+# Grid path steps for Level 6 optimal modes (uses distances.bfs_distance).
+# ---------------------------------------------------------------------------
+
+
+def _grid_neighbors(x: int, y: int) -> Iterable[Coord]:
+    for action in (au.UP, au.DOWN, au.LEFT, au.RIGHT):
+        dx, dy = au.ACTION_DELTA[action]
+        yield x + dx, y + dy
+
+
+def _in_grid_bounds(x: int, y: int, width: int, height: int) -> bool:
+    return 0 <= x < width and 0 <= y < height
+
+
+def _bfs_best_distance_greedy(
+    start: Coord,
+    goal: Coord,
+    width: int,
+    height: int,
+    wall_cells: Set[Coord],
+    legal_actions: List[str],
+    rng: random.Random,
+) -> str:
+    """Fallback when goal is unreachable: minimize BFS distance after one step."""
+    sx, sy = start
+    best: List[str] = []
+    best_d: Optional[int] = None
+    for act in legal_actions:
+        dx, dy = au.ACTION_DELTA[act]
+        nx, ny = sx + dx, sy + dy
+        d = bfs_distance((nx, ny), goal, width, height, wall_cells)
+        if d is None:
+            continue
+        if best_d is None or d < best_d:
+            best_d = d
+            best = [act]
+        elif d == best_d:
+            best.append(act)
+    if best:
+        return min(best, key=lambda a: rng.randint(0, 1000))
+    return rng.choice(legal_actions)
+
+
+def bfs_first_step(
+    start: Coord,
+    goal: Coord,
+    width: int,
+    height: int,
+    wall_cells: Set[Coord],
+    legal_actions: List[str],
+    rng: random.Random,
+) -> str:
+    """Pick a legal action that follows one step along a shortest BFS path."""
+    if not legal_actions:
+        return au.STAY
+    if start == goal:
+        return au.STAY if au.STAY in legal_actions else rng.choice(legal_actions)
+
+    sx, sy = start
+    q: deque[Coord] = deque([start])
+    parent: Dict[Coord, Optional[Coord]] = {start: None}
+
+    while q:
+        x, y = q.popleft()
+        if (x, y) == goal:
+            break
+        for nx, ny in _grid_neighbors(x, y):
+            if not _in_grid_bounds(nx, ny, width, height):
+                continue
+            if (nx, ny) in wall_cells:
+                continue
+            if (nx, ny) in parent:
+                continue
+            parent[(nx, ny)] = (x, y)
+            q.append((nx, ny))
+    else:
+        return _bfs_best_distance_greedy(
+            start, goal, width, height, wall_cells, legal_actions, rng,
+        )
+
+    cur = goal
+    while parent[cur] is not None and parent[cur] != start:
+        cur = parent[cur]
+    fx, fy = cur
+    preferred: List[str] = []
+    for act in legal_actions:
+        dx, dy = au.ACTION_DELTA[act]
+        if sx + dx == fx and sy + dy == fy:
+            preferred.append(act)
+    if preferred:
+        return min(preferred, key=lambda a: rng.randint(0, 1000))
+    return _bfs_best_distance_greedy(
+        start, goal, width, height, wall_cells, legal_actions, rng,
+    )
+
+
+def select_pack_prey_id(
+    predator_positions: List[Coord],
+    oracle_prey: Tuple[Tuple[int, int, int], ...],
+    width: int,
+    height: int,
+    wall_cells: Set[Coord],
+) -> Optional[int]:
+    """Prey id minimizing sum of BFS distances from all predators."""
+    if not oracle_prey or not predator_positions:
+        return None
+
+    unreachable_penalty = width * height * len(predator_positions)
+    best_id: Optional[int] = None
+    best_score: Optional[int] = None
+
+    for px, py, pid in oracle_prey:
+        total = 0
+        for pred in predator_positions:
+            d = bfs_distance(pred, (px, py), width, height, wall_cells)
+            total += d if d is not None else unreachable_penalty
+        if best_score is None or total < best_score or (
+            total == best_score and (best_id is None or pid < best_id)
+        ):
+            best_score = total
+            best_id = pid
+    return best_id
 
 
 # ---------------------------------------------------------------------------
@@ -55,6 +183,10 @@ class DecisionMaking:
         self._rng = rng
         self._mode = mode
 
+    @property
+    def mode(self) -> str:
+        return self._mode
+
     def choose_action(
         self,
         obs: dict,
@@ -73,12 +205,39 @@ class DecisionMaking:
         if obs["team"] == au.TEAM_PREDATOR:
             if self._mode == au.MODE_RANDOM:
                 return self._random_move(legal), False
+            if self._mode == au.MODE_OPTIMAL:
+                return self._optimal(obs, legal), False
             return self._chase(obs, last_seen_enemy, legal)
         return self._flee(obs, last_seen_enemy, legal)
 
     def _random_move(self, legal: List[str]) -> str:
         """Level 1: uniform random over legal actions (ignores perception)."""
         return self._rng.choice(legal)
+
+    def _optimal(self, obs: dict, legal: List[str]) -> str:
+        """Level 6: BFS toward the shared pack target injected by simulation."""
+        target = obs.get("pack_target")
+        if target is None:
+            return self._random_move(legal)
+        tx, ty = target
+        return self._optimal_bfs_step(obs, tx, ty, legal)
+
+    def _optimal_bfs_step(
+        self,
+        obs: dict,
+        tx: int,
+        ty: int,
+        legal: List[str],
+    ) -> str:
+        return bfs_first_step(
+            (obs["ego_x"], obs["ego_y"]),
+            (tx, ty),
+            obs["grid_width"],
+            obs["grid_height"],
+            obs["wall_cells"],
+            legal,
+            self._rng,
+        )
 
     def _chase(
         self,

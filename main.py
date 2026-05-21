@@ -33,12 +33,12 @@ def main() -> None:
     parser.add_argument("--wall-size", type=int, default=2, dest="wall_size", help="Length (in cells) of each randomly generated wall segment.",)
     parser.add_argument(
         "--mode",
-        choices=["random", "chase"],
+        choices=["random", "chase", "optimal"],
         default="chase",
         help=(
-            "Predator decision mode. random: Level 1 (uniform over legal "
-            "actions). chase: Level 2 greedy pursuit; add --comms for "
-            "Level 3. Roles are off in both; Level 4 will add --mode roles."
+            "Predator decision mode. random: Level 1. chase: Level 2 "
+            "(add --comms for Level 3). optimal: Level 6 clairvoyant BFS "
+            "with shared pack focus. Level 4 will add --mode roles."
         ),
     )
     parser.add_argument(

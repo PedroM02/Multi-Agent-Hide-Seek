@@ -61,13 +61,14 @@ class Agent:
         # direct sight > teammate report > empty). When non-empty, refresh
         # memory from it so the fallback memory is never older than the
         # freshest signal the team produced.
-        active = obs["active_enemies"]
-        if active:
-            vis = Perception.update_last_seen_enemy(
-                obs["ego_x"], obs["ego_y"], self.team, active, self.rng,
-            )
-            if vis is not None:
-                self.last_seen_enemy = vis
+        if self.decision.mode != au.MODE_OPTIMAL:
+            active = obs["active_enemies"]
+            if active:
+                vis = Perception.update_last_seen_enemy(
+                    obs["ego_x"], obs["ego_y"], self.team, active, self.rng,
+                )
+                if vis is not None:
+                    self.last_seen_enemy = vis
 
         action, clear_memory = self.decision.choose_action(obs, self.last_seen_enemy)
         if clear_memory:

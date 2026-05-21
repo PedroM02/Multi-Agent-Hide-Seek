@@ -216,11 +216,18 @@ Prey behavior is unchanged across levels (flee, optional stun/kill).
 | 2 | `chase` | off | none | Greedy Manhattan pursuit (`DecisionMaking._chase`) |
 | 3 | `chase` | `predators` / `both` | none | Same chase as Level 2; teammate enemy reports augment perception |
 | 4 | `roles` (future) | TBD | enabled | Coordinated roles (not implemented) |
-| 5–6 | TBD | TBD | TBD | MARL / optimal baselines (not implemented) |
+| 5 | TBD | TBD | TBD | MARL (not implemented) |
+| 6 | `optimal` | off | none | Clairvoyant BFS; all predators share one focus prey until captured |
 
 Levels 1–3 draw **no role letters** in the GUI (`Agent.role` stays `None`).
 Chase logic is unchanged in Levels 2–3; only the role label and assignment
 layer are removed until Level 4.
+
+Level 6 is **clairvoyant**: predators receive true prey positions
+each step via [`distances.bfs_distance`](distances.py) and path-step helpers in [`decision_making.py`](decision_making.py).
+Same-team destination clashes are **not** planned away; the existing
+[`action_resolution`](action_resolution.py) pass resolves them (random
+winner, forced STAY cascade).
 
 ---
 
@@ -477,7 +484,7 @@ All flags are kebab-case; full list available via `python main.py --help`.
 | `--prey N` | 1 | Number of prey per run |
 | `--walls N` | 2 | Random wall segments to generate |
 | `--wall-size N` | 2 | Length of each generated wall segment |
-| `--mode {random,chase}` | `chase` | Predator decision mode (Level 1 random / Level 2 chase; see "Predator behavior levels") |
+| `--mode {random,chase,optimal}` | `chase` | Predator decision mode (see "Predator behavior levels") |
 | `--comms {prey,predators,both}` | off | Enable speaker-centric, single-hop intra-team communication for the given team(s); omit for none |
 | `--prey-defend {stun,kill}` | off | Enable the cooperative-knockout mechanic. Groups of Cheb-1 prey defeat up to `n-1` sandwiched predators per step (sandwicher prey are forced to STAY that step). `stun` freezes the predator for 3 steps; `kill` removes it from the run and ends the episode early once every predator is gone. See "Prey-defend (cooperative knockout)" above. |
 
@@ -497,9 +504,9 @@ through `random.Random(cfg.seed)` constructed per run.
 | [`action_resolution.py`](action_resolution.py) | Same-step intention resolution with the same-team and cross-team movement rules |
 | [`observation_definition.py`](observation_definition.py) | Per-agent observation dict |
 | [`perception.py`](perception.py) | Pure perception helpers: `compute_active_enemies` (direct + shared fusion), `update_last_seen_enemy` memory refresh |
-| [`decision_making.py`](decision_making.py) | Team role selector and per-agent `choose_action` (chase / flee) |
+| [`decision_making.py`](decision_making.py) | Role selector, `choose_action` (chase / flee / optimal), BFS first-step for Level 6 |
 | [`agent.py`](agent.py) | `Agent` class: holds memory, role, role_target; `prepare_observation` perception fusion; `decide` glue |
 | [`agent_utils.py`](agent_utils.py) | Constants: actions, teams, outcomes, role names + display letters |
-| [`distances.py`](distances.py) | `chebyshev`, `manhattan` |
+| [`distances.py`](distances.py) | `chebyshev`, `manhattan`, `bfs_distance` |
 | [`reward_attribution.py`](reward_attribution.py) | Per-step reward shaping (each alive predator gets +1 on every step that a prey is captured) |
 | [`visualization.py`](visualization.py) | Pygame renderer with the legend above |
