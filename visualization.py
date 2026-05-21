@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import random
 
 import pygame
@@ -25,27 +23,27 @@ GRID_PREY = (55, 160, 75)
 ROLE_LETTER_COLOR = (245, 245, 245)
 
 
-def _blit_legend(surface: pygame.Surface, font: pygame.font.Font, x: int, y: int) -> int:
+def _blit_legend(surface, font, x, y):
     """Draw color swatches + team labels; returns x after last label (for layout)."""
-    sw, sh = 14, 14
-    fg = (240, 240, 245)
-    pygame.draw.rect(surface, GRID_PRED, (x, y + 2, sw, sh))
-    surface.blit(font.render("Predator", True, fg), (x + sw + 6, y))
-    x2 = x + sw + 6 + font.size("Predator")[0] + 16
-    pygame.draw.rect(surface, GRID_PREY, (x2, y + 2, sw, sh))
-    surface.blit(font.render("Prey", True, fg), (x2 + sw + 6, y))
-    return x2 + sw + 6 + font.size("Prey")[0]
+    swatch_width, swatch_height = 14, 14
+    foreground = (240, 240, 245)
+    pygame.draw.rect(surface, GRID_PRED, (x, y + 2, swatch_width, swatch_height))
+    surface.blit(font.render("Predator", True, foreground), (x + swatch_width + 6, y))
+    prey_legend_x = x + swatch_width + 6 + font.size("Predator")[0] + 16
+    pygame.draw.rect(surface, GRID_PREY, (prey_legend_x, y + 2, swatch_width, swatch_height))
+    surface.blit(font.render("Prey", True, foreground), (prey_legend_x + swatch_width + 6, y))
+    return prey_legend_x + swatch_width + 6 + font.size("Prey")[0]
 
 
 def _draw_grid(
-    surface: pygame.Surface,
-    env: Environment,
+    surface,
+    env,
     agents,
-    font: pygame.font.Font,
-    status: str,
-    vision_radius_predator: int,
-    vision_radius_prey: int,
-) -> None:
+    font,
+    status,
+    vision_radius_predator,
+    vision_radius_prey,
+):
     surface.fill(HUD_COLOR)
     grid_w = env.width * CELL
     grid_h = env.height * CELL
@@ -59,35 +57,35 @@ def _draw_grid(
                 pygame.draw.rect(grid_surf, GRID_WALL, rect)
             pygame.draw.rect(grid_surf, (0, 0, 0), rect, 1)
 
-    agent_by_id = {a.agent_id: a for a in agents}
+    agent_by_id = {agent.agent_id: agent for agent in agents}
 
-    for b in env.agent_bodies.values():
-        if not b.alive:
+    for body in env.agent_bodies.values():
+        if not body.alive:
             continue
-        rect = pygame.Rect(b.x * CELL + 2, b.y * CELL + 2, CELL - 4, CELL - 4)
-        col = GRID_PRED if b.team == au.TEAM_PREDATOR else GRID_PREY
+        rect = pygame.Rect(body.x * CELL + 2, body.y * CELL + 2, CELL - 4, CELL - 4)
+        color = GRID_PRED if body.team == au.TEAM_PREDATOR else GRID_PREY
         # Stunned predators are drawn dimmed so the "knocked out" state
         # is immediately readable. The role letter also picks up the
         # dimming so the whole body reads as inactive.
-        stunned = b.team == au.TEAM_PREDATOR and b.stun_remaining > 0
+        stunned = body.team == au.TEAM_PREDATOR and body.stun_remaining > 0
         if stunned:
-            col = tuple(c // 2 for c in col)
-        pygame.draw.rect(grid_surf, col, rect, border_radius=4)
+            color = tuple(channel // 2 for channel in color)
+        pygame.draw.rect(grid_surf, color, rect, border_radius=4)
 
-        a = agent_by_id.get(b.agent_id)
-        if a is not None and a.role is not None:
-            letter = au.ROLE_LETTER.get(a.role)
+        agent = agent_by_id.get(body.agent_id)
+        if agent is not None and agent.role is not None:
+            letter = au.ROLE_LETTER.get(agent.role)
             if letter is not None:
                 letter_color = (
-                    tuple(c // 2 for c in ROLE_LETTER_COLOR)
+                    tuple(channel // 2 for channel in ROLE_LETTER_COLOR)
                     if stunned
                     else ROLE_LETTER_COLOR
                 )
                 label = font.render(letter, True, letter_color)
-                lw, lh = label.get_size()
-                cx = b.x * CELL + CELL // 2
-                cy = b.y * CELL + CELL // 2
-                grid_surf.blit(label, (cx - lw // 2, cy - lh // 2))
+                label_width, label_height = label.get_size()
+                center_x = body.x * CELL + CELL // 2
+                center_y = body.y * CELL + CELL // 2
+                grid_surf.blit(label, (center_x - label_width // 2, center_y - label_height // 2))
 
     grid_x = max(0, (surface.get_width() - grid_w) // 2)
     surface.blit(grid_surf, (grid_x, MARGIN_TOP))
@@ -108,7 +106,7 @@ def _draw_grid(
     surface.blit(hint_2, (PAD_X, 74))
 
 
-def run_visualization(config: SimulationConfig, num_runs: int = 1) -> None:
+def run_visualization(config, num_runs=1):
     pygame.init()
     total_runs = max(1, num_runs)
     run_index = 0
@@ -135,9 +133,9 @@ def run_visualization(config: SimulationConfig, num_runs: int = 1) -> None:
     pygame.time.set_timer(pygame.USEREVENT, 0)
 
     summary = BatchSummary()
-    logged_runs: set[int] = set()
+    logged_runs = set()
 
-    def log_current_run_if_done() -> None:
+    def log_current_run_if_done():
         """Record the current run into the batch summary once it finishes.
 
         Called both when advancing to the next run and on quit. The
@@ -163,21 +161,21 @@ def run_visualization(config: SimulationConfig, num_runs: int = 1) -> None:
             flush=True,
         )
 
-    def load_run(idx: int) -> None:
+    def load_run(idx):
         nonlocal run_index, run_seed, rng, sim
         run_index = idx
         run_seed = config.seed + run_index
         rng = random.Random(run_seed)
         sim = SimulationState(config, rng)
 
-    def try_advance_run() -> bool:
+    def try_advance_run():
         if run_index + 1 >= total_runs:
             return False
         log_current_run_if_done()
         load_run(run_index + 1)
         return True
 
-    def status_text() -> str:
+    def status_text():
         return f"Run {run_index + 1}/{total_runs}  {sim.status_line()}  |  Seed={run_seed}"
 
     running = True
@@ -214,7 +212,10 @@ def run_visualization(config: SimulationConfig, num_runs: int = 1) -> None:
                     auto = False
                     pygame.time.set_timer(pygame.USEREVENT, 0)
 
-        _draw_grid(screen, sim.env, sim.agents, font, status_text(), config.vision_radius_predator, config.vision_radius_prey)
+        _draw_grid(
+            screen, sim.env, sim.agents, font, status_text(),
+            config.vision_radius_predator, config.vision_radius_prey,
+        )
         pygame.display.flip()
         clock.tick(60)
 

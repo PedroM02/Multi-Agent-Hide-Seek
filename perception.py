@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import random
 
 from distances import manhattan
@@ -8,11 +6,7 @@ from distances import manhattan
 class Perception:
     """Uses observation only (no full-env reads)."""
 
-    @staticmethod
-    def compute_active_enemies(
-        visible_enemies: tuple[tuple[int, int, int], ...],
-        shared_enemies: tuple[tuple[int, int, int], ...],
-    ) -> tuple[tuple[int, int, int], ...]:
+    def compute_active_enemies(self, visible_enemies, shared_enemies):
         """Priority-resolved set of enemies the agent is currently tracking.
 
         Direct sightings dominate (an enemy I see now is fresher than any
@@ -26,24 +20,24 @@ class Perception:
             return visible_enemies
         return shared_enemies
 
-    @staticmethod
     def update_last_seen_enemy(
-        ego_x: int,
-        ego_y: int,
-        _team: str,
-        visible_enemies: tuple[tuple[int, int, int], ...],
-        rng: random.Random,
-    ) -> tuple[int, int] | None:
+        self,
+        agent_x,
+        agent_y,
+        team,
+        visible_enemies,
+        rng,
+    ):
         if not visible_enemies:
             return None
-        best: tuple[int, int] | None = None
-        best_key: tuple[float, float] | None = None
-        for ex, ey, _eid in visible_enemies:
+        best = None
+        best_key = None
+        for enemy_x, enemy_y, enemy_id in visible_enemies:
             # Random tiebreak: when several visible enemies are equidistant,
             # pick one uniformly instead of biasing by agent id.
-            key = (float(manhattan(ego_x, ego_y, ex, ey)), rng.random())
+            key = (float(manhattan(agent_x, agent_y, enemy_x, enemy_y)), rng.random())
             if best_key is None or key < best_key:
                 best_key = key
-                best = (ex, ey)
+                best = (enemy_x, enemy_y)
         assert best is not None
         return best

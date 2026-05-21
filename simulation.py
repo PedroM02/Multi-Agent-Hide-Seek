@@ -1,7 +1,4 @@
-from __future__ import annotations
-
 import random
-from typing import Dict, List, Optional, Sequence, Tuple
 
 import agent_utils as au
 from action_resolution import resolve_actions
@@ -14,13 +11,13 @@ from reward_attribution import attribute_rewards
 
 
 def generate_walls(
-    width: int,
-    height: int,
-    num_walls: int,
-    wall_size: int,
-    rng: random.Random,
-    existing_walls: Optional[Sequence[Tuple[int, int]]] = None,
-) -> List[Tuple[int, int]]:
+    width,
+    height,
+    num_walls,
+    wall_size,
+    rng,
+    existing_walls=None,
+):
     """Generate `num_walls` straight wall segments (horizontal or vertical),
     each with `wall_size` cells. Walls are placed randomly but never fill
     an entire row/column (to keep the map passable). Already-occupied cells
@@ -28,8 +25,8 @@ def generate_walls(
 
     Returns the combined list of wall cell coordinates.
     """
-    occupied: set[Tuple[int, int]] = set(existing_walls) if existing_walls else set()
-    result: List[Tuple[int, int]] = list(occupied)
+    occupied = set(existing_walls) if existing_walls else set()
+    result = list(occupied)
 
     for _ in range(num_walls):
         # Try up to 50 random placements before giving up on this wall.
@@ -39,9 +36,9 @@ def generate_walls(
                 max_x = width - wall_size
                 if max_x < 0:
                     continue
-                ox = rng.randint(0, max_x)
-                oy = rng.randint(0, height - 1)
-                cells = [(ox + i, oy) for i in range(wall_size)]
+                origin_x = rng.randint(0, max_x)
+                origin_y = rng.randint(0, height - 1)
+                cells = [(origin_x + i, origin_y) for i in range(wall_size)]
                 # Don't block the full row
                 if len(cells) >= width:
                     continue
@@ -49,26 +46,26 @@ def generate_walls(
                 max_y = height - wall_size
                 if max_y < 0:
                     continue
-                ox = rng.randint(0, width - 1)
-                oy = rng.randint(0, max_y)
-                cells = [(ox, oy + i) for i in range(wall_size)]
+                origin_x = rng.randint(0, width - 1)
+                origin_y = rng.randint(0, max_y)
+                cells = [(origin_x, origin_y + i) for i in range(wall_size)]
                 # Don't block the full column
                 if len(cells) >= height:
                     continue
 
             # Skip if any cell already occupied
-            if any(c in occupied for c in cells):
+            if any(cell in occupied for cell in cells):
                 continue
 
-            for c in cells:
-                occupied.add(c)
+            for cell in cells:
+                occupied.add(cell)
             result.extend(cells)
             break
 
     return result
 
 
-def comms_enabled_for_team(config: SimulationConfig, team: str) -> bool:
+def comms_enabled_for_team(config, team):
     """True when `config.comms` enables intra-team messaging for `team`."""
     mode = config.comms
     if mode is None:
@@ -82,9 +79,9 @@ def comms_enabled_for_team(config: SimulationConfig, team: str) -> bool:
     return False
 
 
-def _alive_oracle_prey(env: Environment) -> Tuple[Tuple[int, int, int], ...]:
+def _alive_oracle_prey(env):
     """True positions of all alive prey (Level 6 oracle channel)."""
-    prey: List[Tuple[int, int, int]] = []
+    prey = []
     for body in env.agent_bodies.values():
         if body.alive and body.team == au.TEAM_PREY:
             prey.append((body.x, body.y, body.agent_id))
@@ -92,10 +89,7 @@ def _alive_oracle_prey(env: Environment) -> Tuple[Tuple[int, int, int], ...]:
     return tuple(prey)
 
 
-def _exchange_team_messages(
-    raw_obs: Dict[int, dict],
-    config: SimulationConfig,
-) -> Dict[int, Tuple[Tuple[int, int, int], ...]]:
+def _exchange_team_messages(raw_obs, config):
     """Speaker-centric, single-hop, synchronous team comms.
 
     Every agent on a comms-enabled team broadcasts the enemies it directly
@@ -105,33 +99,33 @@ def _exchange_team_messages(
     sightings are not filtered out here — priority handling lives in
     Agent.decide. Agents on teams with comms disabled do not send.
     """
-    shared: Dict[int, list] = {aid: [] for aid in raw_obs}
+    shared = {agent_id: [] for agent_id in raw_obs}
     for sender_obs in raw_obs.values():
         if not comms_enabled_for_team(config, sender_obs["team"]):
             continue
         sightings = sender_obs["visible_enemies"]
         if not sightings:
             continue
-        for _ax, _ay, ally_id in sender_obs["visible_allies"]:
+        for ally_x, ally_y, ally_id in sender_obs["visible_allies"]:
             if ally_id in shared:
                 shared[ally_id].extend(sightings)
 
-    out: Dict[int, Tuple[Tuple[int, int, int], ...]] = {}
-    for aid, lst in shared.items():
-        seen_ids: set[int] = set()
-        deduped: List[Tuple[int, int, int]] = []
-        for ex, ey, eid in lst:
-            if eid in seen_ids:
+    out = {}
+    for agent_id, messages in shared.items():
+        seen_ids = set()
+        deduped = []
+        for enemy_x, enemy_y, enemy_id in messages:
+            if enemy_id in seen_ids:
                 continue
-            seen_ids.add(eid)
-            deduped.append((ex, ey, eid))
+            seen_ids.add(enemy_id)
+            deduped.append((enemy_x, enemy_y, enemy_id))
         deduped.sort(key=lambda t: (t[2], t[0], t[1]))
-        out[aid] = tuple(deduped)
+        out[agent_id] = tuple(deduped)
     return out
 
 
 class SimulationConfig:
-    def __init__(self) -> None:
+    def __init__(self):
         self.width = 10
         self.height = 8
         self.timesteps = 200
@@ -140,12 +134,12 @@ class SimulationConfig:
         self.num_predators = 1
         self.num_prey = 1
         self.seed = 0
-        self.walls: Optional[Sequence[Tuple[int, int]]] = None
-        self.num_walls: int = 0
-        self.wall_size: int = 3
+        self.walls = None
+        self.num_walls = 0
+        self.wall_size = 3
         # Intra-team communication mode. None = disabled (default).
         # "prey" | "predators" | "both" — see comms_enabled_for_team.
-        self.comms: Optional[str] = None
+        self.comms = None
         # Cooperative-knockout (prey-defend) mechanic. When enabled,
         # groups of Chebyshev-adjacent prey can defeat predators that
         # are Chebyshev-1 of >=2 group members. Two modes:
@@ -155,42 +149,36 @@ class SimulationConfig:
         #   - "kill": predators are removed from the run permanently;
         #             when all predators are dead, prey win.
         # See `SimulationState._resolve_knockouts` for the full rules.
-        self.prey_defend: Optional[str] = None
-        self.stun_duration: int = 3
+        self.prey_defend = None
+        self.stun_duration = 3
         # Predator decision mode — see agent_utils.MODE_*.
-        self.mode: str = au.MODE_CHASE
+        self.mode = au.MODE_CHASE
 
 
-def copy_config(base: SimulationConfig, **overrides) -> SimulationConfig:
-    c = SimulationConfig()
-    c.width = base.width
-    c.height = base.height
-    c.timesteps = base.timesteps
-    c.vision_radius_predator = base.vision_radius_predator
-    c.vision_radius_prey = base.vision_radius_prey
-    c.num_predators = base.num_predators
-    c.num_prey = base.num_prey
-    c.seed = base.seed
-    c.walls = base.walls
-    c.num_walls = base.num_walls
-    c.wall_size = base.wall_size
-    c.comms = base.comms
-    c.prey_defend = base.prey_defend
-    c.stun_duration = base.stun_duration
-    c.mode = base.mode
-    for k, v in overrides.items():
-        setattr(c, k, v)
-    return c
+def copy_config(base, **overrides):
+    new_config = SimulationConfig()
+    new_config.width = base.width
+    new_config.height = base.height
+    new_config.timesteps = base.timesteps
+    new_config.vision_radius_predator = base.vision_radius_predator
+    new_config.vision_radius_prey = base.vision_radius_prey
+    new_config.num_predators = base.num_predators
+    new_config.num_prey = base.num_prey
+    new_config.seed = base.seed
+    new_config.walls = base.walls
+    new_config.num_walls = base.num_walls
+    new_config.wall_size = base.wall_size
+    new_config.comms = base.comms
+    new_config.prey_defend = base.prey_defend
+    new_config.stun_duration = base.stun_duration
+    new_config.mode = base.mode
+    for key, value in overrides.items():
+        setattr(new_config, key, value)
+    return new_config
 
 
 class EpisodeSummary:
-    def __init__(
-        self,
-        outcome: str,
-        steps: int,
-        cumulative_rewards: Dict[int, float],
-        episode_seed: int,
-    ) -> None:
+    def __init__(self, outcome, steps, cumulative_rewards, episode_seed):
         self.outcome = outcome
         self.steps = steps
         self.cumulative_rewards = cumulative_rewards
@@ -198,7 +186,7 @@ class EpisodeSummary:
 
 
 class SimulationState:
-    def __init__(self, config: SimulationConfig, rng: random.Random) -> None:
+    def __init__(self, config, rng):
         self.config = config
         self.rng = rng
 
@@ -215,52 +203,54 @@ class SimulationState:
             )
 
         self.env = Environment(config.width, config.height, walls)
-        self.agents: List[Agent] = []
+        self.agents = []
         self.step_index = 0
         self.outcome = au.OUTCOME_ONGOING
-        self.cumulative_rewards: Dict[int, float] = {}
+        self.cumulative_rewards = {}
         self.reset_episode()
 
-    def reset_episode(self) -> None:
+    def reset_episode(self):
         self.env.set_agent_positions(
             self.config.num_predators,
             self.config.num_prey,
             self.rng,
         )
         self.agents = build_agents_for_env(self.env, self.rng, self.config)
-        for a in self.agents:
-            a.reset_memory()
+        for agent in self.agents:
+            agent.reset_memory()
         self.step_index = 0
         self.outcome = au.OUTCOME_ONGOING
-        self.cumulative_rewards = {bid: 0.0 for bid in self.env.agent_bodies}
-        self._pack_focus_prey_id: Optional[int] = None
+        self.cumulative_rewards = {
+            agent_id: 0.0 for agent_id in self.env.agent_bodies
+        }
+        self._pack_focus_prey_id = None
 
-    def _inject_oracle_obs(self, raw_obs: Dict[int, dict]) -> None:
+    def _inject_oracle_obs(self, raw_obs):
         """Level 6: clairvoyant prey positions + optional shared pack target."""
         if self.config.mode != au.MODE_OPTIMAL:
             return
 
         oracle = _alive_oracle_prey(self.env)
         walls = set(self.env.wall_cells)
-        w, h = self.env.width, self.env.height
+        grid_width, grid_height = self.env.width, self.env.height
 
-        predator_positions: List[Tuple[int, int]] = []
+        predator_positions = []
         for obs in raw_obs.values():
             if obs["team"] == au.TEAM_PREDATOR:
-                predator_positions.append((obs["ego_x"], obs["ego_y"]))
+                predator_positions.append((obs["agent_x"], obs["agent_y"]))
 
-        pack_target: Optional[Tuple[int, int]] = None
-        alive_ids = {pid for _, _, pid in oracle}
+        pack_target = None
+        alive_ids = {prey_id for _, _, prey_id in oracle}
         if self._pack_focus_prey_id not in alive_ids:
             self._pack_focus_prey_id = None
         if oracle and self._pack_focus_prey_id is None:
             self._pack_focus_prey_id = select_pack_prey_id(
-                predator_positions, oracle, w, h, walls,
+                predator_positions, oracle, grid_width, grid_height, walls,
             )
         if self._pack_focus_prey_id is not None:
-            for px, py, pid in oracle:
-                if pid == self._pack_focus_prey_id:
-                    pack_target = (px, py)
+            for prey_x, prey_y, prey_id in oracle:
+                if prey_id == self._pack_focus_prey_id:
+                    pack_target = (prey_x, prey_y)
                     break
 
         for obs in raw_obs.values():
@@ -268,17 +258,17 @@ class SimulationState:
                 continue
             obs["oracle_prey"] = oracle
             obs["wall_cells"] = walls
-            obs["grid_width"] = w
-            obs["grid_height"] = h
+            obs["grid_width"] = grid_width
+            obs["grid_height"] = grid_height
             if pack_target is not None:
                 obs["pack_target"] = pack_target
 
-    def step_once(self) -> bool:
+    def step_once(self):
         if self.outcome != au.OUTCOME_ONGOING:
             return False
 
         # Phase 1: build raw observations for every alive agent.
-        raw_obs: Dict[int, dict] = {}
+        raw_obs = {}
         for agent in self.agents:
             body = self.env.agent_bodies[agent.agent_id]
             if not body.alive:
@@ -298,7 +288,7 @@ class SimulationState:
         if self.config.comms is not None:
             shared_enemies = _exchange_team_messages(raw_obs, self.config)
         else:
-            shared_enemies = {aid: tuple() for aid in raw_obs}
+            shared_enemies = {agent_id: tuple() for agent_id in raw_obs}
 
         # Phase 2b: each agent fuses its direct sightings with the
         # teammate reports addressed to it, producing the
@@ -306,14 +296,14 @@ class SimulationState:
         # The fusion lives on the Agent (delegated to its Perception) so
         # that the simulation only orchestrates — it doesn't decide what
         # the agent "knows".
-        agents_by_id = {a.agent_id: a for a in self.agents}
-        for aid, obs in raw_obs.items():
+        agents_by_id = {agent.agent_id: agent for agent in self.agents}
+        for agent_id, obs in raw_obs.items():
             reports = (
-                shared_enemies[aid]
+                shared_enemies[agent_id]
                 if comms_enabled_for_team(self.config, obs["team"])
                 else tuple()
             )
-            agents_by_id[aid].prepare_observation(obs, reports)
+            agents_by_id[agent_id].prepare_observation(obs, reports)
 
         # Phase 2.5: oracle fields for Level 6 optimal modes.
         self._inject_oracle_obs(raw_obs)
@@ -321,27 +311,29 @@ class SimulationState:
         # Phase 2c: per-team role assignment (Level 4 only, `--mode roles`).
         # Levels 1–3 skip roles; agents keep role=None and the GUI draws
         # no letter. Chase/random behavior lives in DecisionMaking.
-        if au.roles_enabled(self.config.mode):
+        if self.config.mode == au.MODE_ROLES:
             for team in (au.TEAM_PREDATOR, au.TEAM_PREY):
                 team_ids = [
-                    aid for aid, ob in raw_obs.items() if ob["team"] == team
+                    agent_id
+                    for agent_id, observation in raw_obs.items()
+                    if observation["team"] == team
                 ]
                 assignments = select_team_roles(
                     team, team_ids, raw_obs, agents_by_id, self.env,
                 )
-                for aid, (role, target) in assignments.items():
-                    a = agents_by_id[aid]
-                    a.role = role
-                    a.role_target = target
+                for agent_id, (role, target) in assignments.items():
+                    agent = agents_by_id[agent_id]
+                    agent.role = role
+                    agent.role_target = target
         else:
-            for aid in raw_obs:
-                a = agents_by_id[aid]
-                a.role = None
-                a.role_target = None
+            for agent_id in raw_obs:
+                agent = agents_by_id[agent_id]
+                agent.role = None
+                agent.role_target = None
 
         # Phase 3: agents decide using direct sightings, then teammate
         # reports, then their own memory — now within their assigned role.
-        intentions: Dict[int, str] = {}
+        intentions = {}
         for agent in self.agents:
             body = self.env.agent_bodies[agent.agent_id]
             if not body.alive:
@@ -381,9 +373,11 @@ class SimulationState:
 
         resolve_actions(self.env, intentions, self.rng)
         captured = self.env.apply_captures()
-        rews = attribute_rewards(self.env, captured)
-        for aid, r in rews.items():
-            self.cumulative_rewards[aid] = self.cumulative_rewards.get(aid, 0.0) + r
+        rewards = attribute_rewards(self.env, captured)
+        for agent_id, reward in rewards.items():
+            self.cumulative_rewards[agent_id] = (
+                self.cumulative_rewards.get(agent_id, 0.0) + reward
+            )
 
         # Phase 5: decrement stun timers at end of step ("stun" mode
         # only; in "kill" mode no predator ever carries a timer). A
@@ -423,7 +417,7 @@ class SimulationState:
             return False
         return True
 
-    def _resolve_knockouts(self, intentions: Dict[int, str], mode: str) -> None:
+    def _resolve_knockouts(self, intentions, mode):
         """Cooperative knockout pass for the prey-defend mechanic.
 
         Identifies groups of alive prey by connected components on
@@ -461,99 +455,105 @@ class SimulationState:
         """
         assert mode in ("stun", "kill"), f"unexpected prey_defend mode {mode!r}"
         alive_prey_by_id = {
-            b.agent_id: b
-            for b in self.env.agent_bodies.values()
-            if b.alive and b.team == au.TEAM_PREY
+            body.agent_id: body
+            for body in self.env.agent_bodies.values()
+            if body.alive and body.team == au.TEAM_PREY
         }
         if len(alive_prey_by_id) < 2:
             return
 
         alive_pred_by_id = {
-            b.agent_id: b
-            for b in self.env.agent_bodies.values()
-            if b.alive and b.team == au.TEAM_PREDATOR
+            body.agent_id: body
+            for body in self.env.agent_bodies.values()
+            if body.alive and body.team == au.TEAM_PREDATOR
         }
         if not alive_pred_by_id:
             return
 
         # Connected components on prey-prey Chebyshev-1 adjacency.
         prey_ids = sorted(alive_prey_by_id)
-        adj: Dict[int, List[int]] = {pid: [] for pid in prey_ids}
-        for i, pid1 in enumerate(prey_ids):
-            b1 = alive_prey_by_id[pid1]
-            for pid2 in prey_ids[i + 1:]:
-                b2 = alive_prey_by_id[pid2]
-                if chebyshev(b1.x, b1.y, b2.x, b2.y) <= 1:
-                    adj[pid1].append(pid2)
-                    adj[pid2].append(pid1)
+        adjacency = {prey_id: [] for prey_id in prey_ids}
+        for i, prey_id_1 in enumerate(prey_ids):
+            body_1 = alive_prey_by_id[prey_id_1]
+            for prey_id_2 in prey_ids[i + 1:]:
+                body_2 = alive_prey_by_id[prey_id_2]
+                if chebyshev(body_1.x, body_1.y, body_2.x, body_2.y) <= 1:
+                    adjacency[prey_id_1].append(prey_id_2)
+                    adjacency[prey_id_2].append(prey_id_1)
 
-        visited: set[int] = set()
-        groups: List[List[int]] = []
-        for pid in prey_ids:
-            if pid in visited:
+        visited = set()
+        groups = []
+        for prey_id in prey_ids:
+            if prey_id in visited:
                 continue
-            stack = [pid]
-            comp: List[int] = []
+            stack = [prey_id]
+            component = []
             while stack:
-                cur = stack.pop()
-                if cur in visited:
+                current = stack.pop()
+                if current in visited:
                     continue
-                visited.add(cur)
-                comp.append(cur)
-                for nb in adj[cur]:
-                    if nb not in visited:
-                        stack.append(nb)
-            comp.sort()
-            groups.append(comp)
-        groups.sort(key=lambda g: g[0])
+                visited.add(current)
+                component.append(current)
+                for neighbor_id in adjacency[current]:
+                    if neighbor_id not in visited:
+                        stack.append(neighbor_id)
+            component.sort()
+            groups.append(component)
+        groups.sort(key=lambda group: group[0])
 
-        defeated_this_step: set[int] = set()
-        pred_ids_sorted = sorted(alive_pred_by_id)
+        defeated_this_step = set()
+        predator_ids_sorted = sorted(alive_pred_by_id)
 
         for group in groups:
-            n = len(group)
-            if n < 2:
+            group_size = len(group)
+            if group_size < 2:
                 continue
-            cap = n - 1
+            cap = group_size - 1
 
-            candidates: List[int] = []
-            for pid_pred in pred_ids_sorted:
-                if pid_pred in defeated_this_step:
+            candidates = []
+            for predator_id in predator_ids_sorted:
+                if predator_id in defeated_this_step:
                     continue
-                pb = alive_pred_by_id[pid_pred]
-                if pb.stun_remaining > 0:
+                predator_body = alive_pred_by_id[predator_id]
+                if predator_body.stun_remaining > 0:
                     continue
                 count = 0
                 for prey_id in group:
-                    pry = alive_prey_by_id[prey_id]
-                    if chebyshev(pb.x, pb.y, pry.x, pry.y) <= 1:
+                    prey_body = alive_prey_by_id[prey_id]
+                    if chebyshev(
+                        predator_body.x, predator_body.y,
+                        prey_body.x, prey_body.y,
+                    ) <= 1:
                         count += 1
                         if count >= 2:
                             break
                 if count >= 2:
-                    candidates.append(pid_pred)
+                    candidates.append(predator_id)
 
             if not candidates:
                 continue
             chosen = candidates[:cap]
-            for pred_id in chosen:
-                defeated_this_step.add(pred_id)
-                pb = alive_pred_by_id[pred_id]
+            for predator_id in chosen:
+                defeated_this_step.add(predator_id)
+                predator_body = alive_pred_by_id[predator_id]
                 if mode == "stun":
-                    pb.stun_remaining = self.config.stun_duration
+                    predator_body.stun_remaining = self.config.stun_duration
                 else:  # mode == "kill"
-                    pb.alive = False
-                intentions[pred_id] = au.STAY
+                    predator_body.alive = False
+                intentions[predator_id] = au.STAY
                 for prey_id in group:
-                    pry = alive_prey_by_id[prey_id]
-                    if chebyshev(pb.x, pb.y, pry.x, pry.y) <= 1:
+                    prey_body = alive_prey_by_id[prey_id]
+                    if chebyshev(
+                        predator_body.x, predator_body.y,
+                        prey_body.x, prey_body.y,
+                    ) <= 1:
                         intentions[prey_id] = au.STAY
 
-    def status_line(self) -> str:
+    def status_line(self):
         return f"Timestep {self.step_index}/{self.config.timesteps}  Current Outcome={self.outcome}"
 
 
-def run_episode(config: SimulationConfig, rng: random.Random) -> EpisodeSummary:
+def run_episode(config, rng):
     sim = SimulationState(config, rng)
     while sim.step_once():
         pass
@@ -566,7 +566,7 @@ def run_episode(config: SimulationConfig, rng: random.Random) -> EpisodeSummary:
 
 
 class BatchSummary:
-    def __init__(self) -> None:
+    def __init__(self):
         self.predator_wins = 0
         # Counts every prey-victory episode (timeout OR `--prey-defend
         # kill` elimination of all predators). The old name
@@ -582,24 +582,24 @@ class BatchSummary:
         self.runs = 0
 
 
-def run_batch(config: SimulationConfig, num_runs: int) -> BatchSummary:
-    acc = BatchSummary()
+def run_batch(config, num_runs):
+    accumulator = BatchSummary()
     for i in range(num_runs):
-        cfg = copy_config(config, seed=config.seed + i)
-        rng = random.Random(cfg.seed)
-        summary = run_episode(cfg, rng)
-        acc.runs += 1
-        acc.total_steps += summary.steps
+        run_config = copy_config(config, seed=config.seed + i)
+        rng = random.Random(run_config.seed)
+        summary = run_episode(run_config, rng)
+        accumulator.runs += 1
+        accumulator.total_steps += summary.steps
         if summary.outcome == au.OUTCOME_PREDATORS_WIN:
-            acc.predator_wins += 1
-            acc.predator_win_steps += summary.steps
+            accumulator.predator_wins += 1
+            accumulator.predator_win_steps += summary.steps
         elif summary.outcome == au.OUTCOME_PREY_WIN:
-            acc.prey_wins += 1
-            acc.prey_win_steps += summary.steps
-    return acc
+            accumulator.prey_wins += 1
+            accumulator.prey_win_steps += summary.steps
+    return accumulator
 
 
-def format_batch_summary(summary: BatchSummary, config: SimulationConfig) -> str:
+def format_batch_summary(summary, config):
     """Render a `BatchSummary` as a one-data-row markdown table.
 
     The layout is designed for the writeup workflow: each command
@@ -623,7 +623,7 @@ def format_batch_summary(summary: BatchSummary, config: SimulationConfig) -> str
     rather than `n/a` to match the visual style of the source
     spreadsheet — markdown renderers display them as blank.
     """
-    def fmt_mean(total: int, count: int) -> str:
+    def fmt_mean(total, count):
         if count <= 0:
             return ""
         return f"{total / count:.2f}"
@@ -647,9 +647,9 @@ def format_batch_summary(summary: BatchSummary, config: SimulationConfig) -> str
         fmt_mean(summary.prey_win_steps, summary.prey_wins),
     ]
 
-    header = "| " + " | ".join(label for label, _w in header_cells) + " |"
-    sep = "| " + " | ".join("-" * w for _label, w in header_cells) + " |"
+    header = "| " + " | ".join(label for label, _width in header_cells) + " |"
+    sep = "| " + " | ".join("-" * width for _label, width in header_cells) + " |"
     row = "| " + " | ".join(
-        f"{value:>{w}}" for value, (_label, w) in zip(data_cells, header_cells)
+        f"{value:>{width}}" for value, (_label, width) in zip(data_cells, header_cells)
     ) + " |"
     return "\n".join([header, sep, row])

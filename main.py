@@ -1,13 +1,12 @@
-from __future__ import annotations
 from simulation import BatchSummary, SimulationConfig, format_batch_summary, run_batch
 
 import argparse
 
 
-def _parse_walls(raw: str | None) -> list[tuple[int, int]] | None:
+def _parse_walls(raw):
     if not raw:
         return None
-    out: list[tuple[int, int]] = []
+    out = []
     for part in raw.split(";"):
         part = part.strip()
         if not part:
@@ -17,7 +16,7 @@ def _parse_walls(raw: str | None) -> list[tuple[int, int]] | None:
     return out
 
 
-def main() -> None:
+def main():
     parser = argparse.ArgumentParser(description="Predator–prey grid MAS. Default: batch runs without GUI; use --gui for pygame.",)
     parser.add_argument("--gui", action="store_true", help="Open pygame window (otherwise batch text output).")
     parser.add_argument("--width", type=int, default=10, help="Playable cells wide (no separate border layer).")
@@ -92,7 +91,7 @@ def main() -> None:
         run_visualization(config, args.runs)
         return
 
-    summary: BatchSummary = run_batch(config, args.runs)
+    summary = run_batch(config, args.runs)
     print(format_batch_summary(summary, config))
 
 

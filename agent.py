@@ -1,4 +1,3 @@
-from __future__ import annotations
 from decision_making import DecisionMaking
 from perception import Perception
 
@@ -7,38 +6,26 @@ import random
 import agent_utils as au
 
 
-
 class Agent:
-    def __init__(
-        self,
-        agent_id: int,
-        team: str,
-        perception: Perception,
-        decision: DecisionMaking,
-        rng: random.Random,
-    ) -> None:
+    def __init__(self, agent_id, team, perception, decision, rng):
         self.agent_id = agent_id
         self.team = team
         self.perception = perception
         self.decision = decision
         self.rng = rng
-        self.last_seen_enemy: tuple[int, int] | None = None
+        self.last_seen_enemy = None
         # Role assignment is written by the team role selector each step
         # (see simulation.step_once). The role_target is sticky between
         # selector calls when still valid; the selector itself preserves it.
-        self.role: str | None = None
-        self.role_target: tuple[int, int] | None = None
+        self.role = None
+        self.role_target = None
 
-    def reset_memory(self) -> None:
+    def reset_memory(self):
         self.last_seen_enemy = None
         self.role = None
         self.role_target = None
 
-    def prepare_observation(
-        self,
-        obs: dict,
-        shared_enemies: tuple[tuple[int, int, int], ...],
-    ) -> None:
+    def prepare_observation(self, obs, shared_enemies):
         """Fuse the raw observation with teammate reports.
 
         Run once per step before the role selector and before decide. The
@@ -52,7 +39,7 @@ class Agent:
             obs["visible_enemies"], shared_enemies,
         )
 
-    def decide(self, obs: dict) -> str:
+    def decide(self, obs):
         assert obs["agent_id"] == self.agent_id
         assert obs["team"] == self.team
 
@@ -64,11 +51,11 @@ class Agent:
         if self.decision.mode != au.MODE_OPTIMAL:
             active = obs["active_enemies"]
             if active:
-                vis = Perception.update_last_seen_enemy(
-                    obs["ego_x"], obs["ego_y"], self.team, active, self.rng,
+                visible_position = self.perception.update_last_seen_enemy(
+                    obs["agent_x"], obs["agent_y"], self.team, active, self.rng,
                 )
-                if vis is not None:
-                    self.last_seen_enemy = vis
+                if visible_position is not None:
+                    self.last_seen_enemy = visible_position
 
         action, clear_memory = self.decision.choose_action(obs, self.last_seen_enemy)
         if clear_memory:
@@ -76,10 +63,10 @@ class Agent:
         return action
 
 
-def build_agents_for_env(env, rng: random.Random, config) -> list[Agent]:
+def build_agents_for_env(env, rng, config):
     shared_perception = Perception()
-    agents: list[Agent] = []
-    for body in sorted(env.agent_bodies.values(), key=lambda b: b.agent_id):
+    agents = []
+    for body in sorted(env.agent_bodies.values(), key=lambda body: body.agent_id):
         # Each agent gets its own RNGs seeded from the parent — avoids
         # coupled "random" choices where both agents draw from the same
         # generator state in the same step. Perception and decision use

@@ -1,28 +1,22 @@
-from __future__ import annotations
-
 from environment import Environment
 from distances import chebyshev
 
 
-def build_observation(
-    env: Environment,
-    agent_id: int,
-    vision_radius: int,
-) -> dict:
+def build_observation(env, agent_id, vision_radius):
     body = env.agent_bodies[agent_id]
-    legal = env.legal_actions(agent_id)
-    enemies: list[tuple[int, int, int]] = []
-    allies: list[tuple[int, int, int]] = []
+    legal_actions = env.legal_actions(agent_id)
+    enemies = []
+    allies = []
     if not body.alive:
         return {
             "agent_id": agent_id,
             "team": body.team,
-            "ego_x": body.x,
-            "ego_y": body.y,
+            "agent_x": body.x,
+            "agent_y": body.y,
             "vision_radius": vision_radius,
             "visible_enemies": tuple(),
             "visible_allies": tuple(),
-            "legal_actions": legal,
+            "legal_actions": legal_actions,
         }
     my_team = body.team
     for other in env.agent_bodies.values():
@@ -40,10 +34,10 @@ def build_observation(
     return {
         "agent_id": agent_id,
         "team": body.team,
-        "ego_x": body.x,
-        "ego_y": body.y,
+        "agent_x": body.x,
+        "agent_y": body.y,
         "vision_radius": vision_radius,
         "visible_enemies": tuple(enemies),
         "visible_allies": tuple(allies),
-        "legal_actions": legal,
+        "legal_actions": legal_actions,
     }

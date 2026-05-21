@@ -1,14 +1,7 @@
-from __future__ import annotations
-
 import random
-from collections import deque
-from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 import agent_utils as au
-from distances import bfs_distance, chebyshev, manhattan
-from environment import Environment
-
-Coord = Tuple[int, int]
+from distances import _grid_neighbors, _in_grid_bounds, bfs_distance, chebyshev, manhattan
 
 
 # ---------------------------------------------------------------------------
@@ -16,9 +9,9 @@ Coord = Tuple[int, int]
 # ---------------------------------------------------------------------------
 
 
-def _apply_action(x: int, y: int, action: str) -> Tuple[int, int]:
-    dx, dy = au.ACTION_DELTA[action]
-    return x + dx, y + dy
+def _apply_action(x, y, action):
+    delta_x, delta_y = au.ACTION_DELTA[action]
+    return x + delta_x, y + delta_y
 
 
 # ---------------------------------------------------------------------------
@@ -26,91 +19,83 @@ def _apply_action(x: int, y: int, action: str) -> Tuple[int, int]:
 # ---------------------------------------------------------------------------
 
 
-def _grid_neighbors(x: int, y: int) -> Iterable[Coord]:
-    for action in (au.UP, au.DOWN, au.LEFT, au.RIGHT):
-        dx, dy = au.ACTION_DELTA[action]
-        yield x + dx, y + dy
-
-
-def _in_grid_bounds(x: int, y: int, width: int, height: int) -> bool:
-    return 0 <= x < width and 0 <= y < height
-
-
 def _bfs_best_distance_greedy(
-    start: Coord,
-    goal: Coord,
-    width: int,
-    height: int,
-    wall_cells: Set[Coord],
-    legal_actions: List[str],
-    rng: random.Random,
-) -> str:
+    start,
+    goal,
+    width,
+    height,
+    wall_cells,
+    legal_actions,
+    rng,
+):
     """Fallback when goal is unreachable: minimize BFS distance after one step."""
-    sx, sy = start
-    best: List[str] = []
-    best_d: Optional[int] = None
-    for act in legal_actions:
-        dx, dy = au.ACTION_DELTA[act]
-        nx, ny = sx + dx, sy + dy
-        d = bfs_distance((nx, ny), goal, width, height, wall_cells)
-        if d is None:
+    start_x, start_y = start
+    best = []
+    best_distance = None
+    for action in legal_actions:
+        delta_x, delta_y = au.ACTION_DELTA[action]
+        neighbor_x, neighbor_y = start_x + delta_x, start_y + delta_y
+        distance = bfs_distance(
+            (neighbor_x, neighbor_y), goal, width, height, wall_cells,
+        )
+        if distance is None:
             continue
-        if best_d is None or d < best_d:
-            best_d = d
-            best = [act]
-        elif d == best_d:
-            best.append(act)
+        if best_distance is None or distance < best_distance:
+            best_distance = distance
+            best = [action]
+        elif distance == best_distance:
+            best.append(action)
     if best:
         return min(best, key=lambda a: rng.randint(0, 1000))
     return rng.choice(legal_actions)
 
 
 def bfs_first_step(
-    start: Coord,
-    goal: Coord,
-    width: int,
-    height: int,
-    wall_cells: Set[Coord],
-    legal_actions: List[str],
-    rng: random.Random,
-) -> str:
+    start,
+    goal,
+    width,
+    height,
+    wall_cells,
+    legal_actions,
+    rng,
+):
     """Pick a legal action that follows one step along a shortest BFS path."""
     if not legal_actions:
         return au.STAY
     if start == goal:
         return au.STAY if au.STAY in legal_actions else rng.choice(legal_actions)
 
-    sx, sy = start
-    q: deque[Coord] = deque([start])
-    parent: Dict[Coord, Optional[Coord]] = {start: None}
+    start_x, start_y = start
+    queue = [start]
+    parent = {start: None}
 
-    while q:
-        x, y = q.popleft()
+    while queue:
+        x, y = queue.pop(0)
         if (x, y) == goal:
             break
-        for nx, ny in _grid_neighbors(x, y):
-            if not _in_grid_bounds(nx, ny, width, height):
+        for neighbor_x, neighbor_y in _grid_neighbors(x, y):
+            if not _in_grid_bounds(neighbor_x, neighbor_y, width, height):
                 continue
-            if (nx, ny) in wall_cells:
+            if (neighbor_x, neighbor_y) in wall_cells:
                 continue
-            if (nx, ny) in parent:
+            if (neighbor_x, neighbor_y) in parent:
                 continue
-            parent[(nx, ny)] = (x, y)
-            q.append((nx, ny))
+            parent[(neighbor_x, neighbor_y)] = (x, y)
+            queue.append((neighbor_x, neighbor_y))
     else:
         return _bfs_best_distance_greedy(
             start, goal, width, height, wall_cells, legal_actions, rng,
         )
 
-    cur = goal
-    while parent[cur] is not None and parent[cur] != start:
-        cur = parent[cur]
-    fx, fy = cur
-    preferred: List[str] = []
-    for act in legal_actions:
-        dx, dy = au.ACTION_DELTA[act]
-        if sx + dx == fx and sy + dy == fy:
-            preferred.append(act)
+    current = goal
+    while parent[current] is not None and parent[current] != start:
+        current = parent[current]
+    first_step_x, first_step_y = current
+    preferred = []
+    for action in legal_actions:
+        delta_x, delta_y = au.ACTION_DELTA[action]
+        if start_x + delta_x == first_step_x and start_y + delta_y == first_step_y:
+            preferred.append(action)
     if preferred:
         return min(preferred, key=lambda a: rng.randint(0, 1000))
     return _bfs_best_distance_greedy(
@@ -119,30 +104,32 @@ def bfs_first_step(
 
 
 def select_pack_prey_id(
-    predator_positions: List[Coord],
-    oracle_prey: Tuple[Tuple[int, int, int], ...],
-    width: int,
-    height: int,
-    wall_cells: Set[Coord],
-) -> Optional[int]:
+    predator_positions,
+    oracle_prey,
+    width,
+    height,
+    wall_cells,
+):
     """Prey id minimizing sum of BFS distances from all predators."""
     if not oracle_prey or not predator_positions:
         return None
 
     unreachable_penalty = width * height * len(predator_positions)
-    best_id: Optional[int] = None
-    best_score: Optional[int] = None
+    best_id = None
+    best_score = None
 
-    for px, py, pid in oracle_prey:
+    for prey_x, prey_y, prey_id in oracle_prey:
         total = 0
-        for pred in predator_positions:
-            d = bfs_distance(pred, (px, py), width, height, wall_cells)
-            total += d if d is not None else unreachable_penalty
+        for predator_position in predator_positions:
+            distance = bfs_distance(
+                predator_position, (prey_x, prey_y), width, height, wall_cells,
+            )
+            total += distance if distance is not None else unreachable_penalty
         if best_score is None or total < best_score or (
-            total == best_score and (best_id is None or pid < best_id)
+            total == best_score and (best_id is None or prey_id < best_id)
         ):
             best_score = total
-            best_id = pid
+            best_id = prey_id
     return best_id
 
 
@@ -153,12 +140,12 @@ def select_pack_prey_id(
 
 
 def select_team_roles(
-    team: str,
-    team_ids: List[int],
-    obs_by_id: Dict[int, dict],
-    agents_by_id: Dict[int, Any],
-    env: Environment,
-) -> Dict[int, Tuple[str, Optional[Tuple[int, int]]]]:
+    team,
+    team_ids,
+    obs_by_id,
+    agents_by_id,
+    env,
+):
     """Assign (role, role_target) to every alive agent in `team`.
 
     Currently trivial: predators all become CHASER, prey all become FLEE.
@@ -169,8 +156,8 @@ def select_team_roles(
     if not team_ids:
         return {}
     if team == au.TEAM_PREDATOR:
-        return {aid: (au.ROLE_CHASER, None) for aid in team_ids}
-    return {aid: (au.ROLE_FLEE, None) for aid in team_ids}
+        return {agent_id: (au.ROLE_CHASER, None) for agent_id in team_ids}
+    return {agent_id: (au.ROLE_FLEE, None) for agent_id in team_ids}
 
 
 # ---------------------------------------------------------------------------
@@ -179,19 +166,11 @@ def select_team_roles(
 
 
 class DecisionMaking:
-    def __init__(self, rng: random.Random, mode: str = au.MODE_CHASE) -> None:
-        self._rng = rng
-        self._mode = mode
+    def __init__(self, rng, mode=au.MODE_CHASE):
+        self.rng = rng
+        self.mode = mode
 
-    @property
-    def mode(self) -> str:
-        return self._mode
-
-    def choose_action(
-        self,
-        obs: dict,
-        last_seen_enemy: Optional[Tuple[int, int]],
-    ) -> Tuple[str, bool]:
+    def choose_action(self, obs, last_seen_enemy):
         """Return (chosen_action, should_clear_memory).
 
         should_clear_memory is True when the agent reached its last-seen
@@ -203,50 +182,39 @@ class DecisionMaking:
             return au.STAY, False
 
         if obs["team"] == au.TEAM_PREDATOR:
-            if self._mode == au.MODE_RANDOM:
+            if self.mode == au.MODE_RANDOM:
                 return self._random_move(legal), False
-            if self._mode == au.MODE_OPTIMAL:
+            if self.mode == au.MODE_OPTIMAL:
                 return self._optimal(obs, legal), False
             return self._chase(obs, last_seen_enemy, legal)
         return self._flee(obs, last_seen_enemy, legal)
 
-    def _random_move(self, legal: List[str]) -> str:
+    def _random_move(self, legal):
         """Level 1: uniform random over legal actions (ignores perception)."""
-        return self._rng.choice(legal)
+        return self.rng.choice(legal)
 
-    def _optimal(self, obs: dict, legal: List[str]) -> str:
+    def _optimal(self, obs, legal):
         """Level 6: BFS toward the shared pack target injected by simulation."""
         target = obs.get("pack_target")
         if target is None:
             return self._random_move(legal)
-        tx, ty = target
-        return self._optimal_bfs_step(obs, tx, ty, legal)
+        target_x, target_y = target
+        return self._optimal_bfs_step(obs, target_x, target_y, legal)
 
-    def _optimal_bfs_step(
-        self,
-        obs: dict,
-        tx: int,
-        ty: int,
-        legal: List[str],
-    ) -> str:
+    def _optimal_bfs_step(self, obs, target_x, target_y, legal):
         return bfs_first_step(
-            (obs["ego_x"], obs["ego_y"]),
-            (tx, ty),
+            (obs["agent_x"], obs["agent_y"]),
+            (target_x, target_y),
             obs["grid_width"],
             obs["grid_height"],
             obs["wall_cells"],
             legal,
-            self._rng,
+            self.rng,
         )
 
-    def _chase(
-        self,
-        obs: dict,
-        last_seen_enemy: Optional[Tuple[int, int]],
-        legal: List[str],
-    ) -> Tuple[str, bool]:
+    def _chase(self, obs, last_seen_enemy, legal):
         active = obs["active_enemies"]
-        ego_x, ego_y = obs["ego_x"], obs["ego_y"]
+        agent_x, agent_y = obs["agent_x"], obs["agent_y"]
 
         if active:
             target = last_seen_enemy
@@ -255,23 +223,18 @@ class DecisionMaking:
             target = last_seen_enemy
             stale = True
         else:
-            return self._rng.choice(legal), False
+            return self.rng.choice(legal), False
 
         assert target is not None
-        tx, ty = target
-        if stale and ego_x == tx and ego_y == ty:
-            return self._rng.choice(legal), True
-        return self._navigate_to(ego_x, ego_y, tx, ty, legal), False
+        target_x, target_y = target
+        if stale and agent_x == target_x and agent_y == target_y:
+            return self.rng.choice(legal), True
+        return self._navigate_to(agent_x, agent_y, target_x, target_y, legal), False
 
-    def _flee(
-        self,
-        obs: dict,
-        last_seen_enemy: Optional[Tuple[int, int]],
-        legal: List[str],
-    ) -> Tuple[str, bool]:
+    def _flee(self, obs, last_seen_enemy, legal):
         active = obs["active_enemies"]
         visible_allies = obs.get("visible_allies", ())
-        ego_x, ego_y = obs["ego_x"], obs["ego_y"]
+        agent_x, agent_y = obs["agent_x"], obs["agent_y"]
 
         if active:
             target = last_seen_enemy
@@ -285,26 +248,28 @@ class DecisionMaking:
             # threat appears (this is what makes the cooperative
             # knockout mechanic reachable in practice).
             return self._wander_with_cohesion(
-                ego_x, ego_y, legal, visible_allies
+                agent_x, agent_y, legal, visible_allies
             ), False
 
         assert target is not None
-        tx, ty = target
-        if stale and ego_x == tx and ego_y == ty:
+        target_x, target_y = target
+        if stale and agent_x == target_x and agent_y == target_y:
             # Reached the stale memory cell without finding the enemy;
             # drop the memory and wander (still cohesion-biased).
             return self._wander_with_cohesion(
-                ego_x, ego_y, legal, visible_allies
+                agent_x, agent_y, legal, visible_allies
             ), True
 
         # Current distances to all *non-primary* threats. The "safe"
         # check below only fires on these — only the primary target
         # governs the actual flee direction.
-        current_other_dists: Dict[int, int] = {}
-        for ex, ey, eid in active:
-            if ex == tx and ey == ty:
+        current_other_distances = {}
+        for enemy_x, enemy_y, enemy_id in active:
+            if enemy_x == target_x and enemy_y == target_y:
                 continue
-            current_other_dists[eid] = manhattan(ego_x, ego_y, ex, ey)
+            current_other_distances[enemy_id] = manhattan(
+                agent_x, agent_y, enemy_x, enemy_y,
+            )
 
         # Split STAY out of the legal set before computing the
         # "safe" subset. STAY trivially never closes distance to anyone
@@ -324,10 +289,12 @@ class DecisionMaking:
         # producing a step-into-capture. The agent already sees the
         # active enemies' positions in `obs`, so this guard uses no
         # new information channel.
-        active_cells = {(ex, ey) for ex, ey, _ in active}
+        active_cells = {
+            (enemy_x, enemy_y) for enemy_x, enemy_y, _ in active
+        }
         cardinals = [
-            act for act in cardinals
-            if _apply_action(ego_x, ego_y, act) not in active_cells
+            action for action in cardinals
+            if _apply_action(agent_x, agent_y, action) not in active_cells
         ]
 
         # No ally-stack guard here. A move that lands on a teammate's
@@ -347,18 +314,18 @@ class DecisionMaking:
         # alternative (refusing to stack and walking into a
         # predator instead).
 
-        safe_cardinals: List[str] = []
-        for act in cardinals:
-            nx, ny = _apply_action(ego_x, ego_y, act)
+        safe_cardinals = []
+        for action in cardinals:
+            neighbor_x, neighbor_y = _apply_action(agent_x, agent_y, action)
             gets_closer_to_other = False
-            for ex, ey, eid in active:
-                if eid not in current_other_dists:
+            for enemy_x, enemy_y, enemy_id in active:
+                if enemy_id not in current_other_distances:
                     continue
-                if manhattan(nx, ny, ex, ey) < current_other_dists[eid]:
+                if manhattan(neighbor_x, neighbor_y, enemy_x, enemy_y) < current_other_distances[enemy_id]:
                     gets_closer_to_other = True
                     break
             if not gets_closer_to_other:
-                safe_cardinals.append(act)
+                safe_cardinals.append(action)
 
         if safe_cardinals:
             # At least one real cardinal doesn't close on any
@@ -384,9 +351,9 @@ class DecisionMaking:
             # just decided they're bad.
             candidate_actions = [au.STAY] if au.STAY in legal else list(legal)
 
-        def score_prey(act: str) -> Tuple[int, int, int]:
-            nx, ny = _apply_action(ego_x, ego_y, act)
-            d_primary = manhattan(nx, ny, tx, ty)
+        def score_prey(action):
+            neighbor_x, neighbor_y = _apply_action(agent_x, agent_y, action)
+            primary_distance = manhattan(neighbor_x, neighbor_y, target_x, target_y)
             # Cohesion term: prefer moves that keep the prey within
             # Chebyshev-1 of at least one visible teammate. d_a = 1
             # is the sweet spot for the cooperative-knockout mechanic
@@ -402,24 +369,24 @@ class DecisionMaking:
             # if it doesn't — both acceptable. With no visible ally
             # the term is neutral, preserving solo-prey behaviour.
             if visible_allies:
-                d_a = min(
-                    chebyshev(nx, ny, ax, ay)
-                    for (ax, ay, _) in visible_allies
+                ally_distance = min(
+                    chebyshev(neighbor_x, neighbor_y, ally_x, ally_y)
+                    for (ally_x, ally_y, _) in visible_allies
                 )
-                ally_term = abs(d_a - 1)
+                ally_term = abs(ally_distance - 1)
             else:
                 ally_term = 0
-            return (-d_primary, ally_term, self._rng.randint(0, 1000))
+            return (-primary_distance, ally_term, self.rng.randint(0, 1000))
 
         return min(candidate_actions, key=score_prey), False
 
     def _wander_with_cohesion(
         self,
-        ego_x: int,
-        ego_y: int,
-        legal: List[str],
-        visible_allies: Tuple[Tuple[int, int, int], ...],
-    ) -> str:
+        agent_x,
+        agent_y,
+        legal,
+        visible_allies,
+    ):
         """Cohesion-biased wander.
 
         With no visible ally this is just a uniform random pick over
@@ -431,13 +398,15 @@ class DecisionMaking:
         already adjacent to an ally happily holds the formation.
         """
         if not visible_allies:
-            return self._rng.choice(legal)
+            return self.rng.choice(legal)
 
         cardinals = [a for a in legal if a != au.STAY]
-        ally_cells = {(ax, ay) for ax, ay, _ in visible_allies}
+        ally_cells = {
+            (ally_x, ally_y) for ally_x, ally_y, _ in visible_allies
+        }
         cardinals = [
-            act for act in cardinals
-            if _apply_action(ego_x, ego_y, act) not in ally_cells
+            action for action in cardinals
+            if _apply_action(agent_x, agent_y, action) not in ally_cells
         ]
         candidates = cardinals + (
             [au.STAY] if au.STAY in legal else []
@@ -445,26 +414,22 @@ class DecisionMaking:
         if not candidates:
             candidates = list(legal)
 
-        def score(act: str) -> Tuple[int, int]:
-            nx, ny = _apply_action(ego_x, ego_y, act)
-            d_a = min(
-                chebyshev(nx, ny, ax, ay)
-                for (ax, ay, _) in visible_allies
+        def score(action):
+            neighbor_x, neighbor_y = _apply_action(agent_x, agent_y, action)
+            ally_distance = min(
+                chebyshev(neighbor_x, neighbor_y, ally_x, ally_y)
+                for (ally_x, ally_y, _) in visible_allies
             )
-            return (abs(d_a - 1), self._rng.randint(0, 1000))
+            return (abs(ally_distance - 1), self.rng.randint(0, 1000))
 
         return min(candidates, key=score)
 
-    def _navigate_to(
-        self,
-        ego_x: int,
-        ego_y: int,
-        tx: int,
-        ty: int,
-        legal: List[str],
-    ) -> str:
-        def score(act: str) -> Tuple[int, int]:
-            nx, ny = _apply_action(ego_x, ego_y, act)
-            return (abs(nx - tx) + abs(ny - ty), self._rng.randint(0, 1000))
+    def _navigate_to(self, agent_x, agent_y, target_x, target_y, legal):
+        def score(action):
+            neighbor_x, neighbor_y = _apply_action(agent_x, agent_y, action)
+            return (
+                abs(neighbor_x - target_x) + abs(neighbor_y - target_y),
+                self.rng.randint(0, 1000),
+            )
 
         return min(legal, key=score)

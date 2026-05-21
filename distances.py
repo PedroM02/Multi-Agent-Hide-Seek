@@ -1,60 +1,47 @@
-from __future__ import annotations
-
-from collections import deque
-from typing import Dict, Iterable, Optional, Set, Tuple
-
 import agent_utils as au
 
-Coord = Tuple[int, int]
+
+def manhattan(first_x, first_y, second_x, second_y):
+    return abs(first_x - second_x) + abs(first_y - second_y)
 
 
-def manhattan(x1: int, y1: int, x2: int, y2: int) -> int:
-    return abs(x1 - x2) + abs(y1 - y2)
+def chebyshev(first_x, first_y, second_x, second_y):
+    return max(abs(first_x - second_x), abs(first_y - second_y))
 
 
-def chebyshev(x1: int, y1: int, x2: int, y2: int) -> int:
-    return max(abs(x1 - x2), abs(y1 - y2))
-
-
-def _grid_neighbors(x: int, y: int) -> Iterable[Coord]:
+def _grid_neighbors(x, y):
     for action in (au.UP, au.DOWN, au.LEFT, au.RIGHT):
-        dx, dy = au.ACTION_DELTA[action]
-        yield x + dx, y + dy
+        delta_x, delta_y = au.ACTION_DELTA[action]
+        yield x + delta_x, y + delta_y
 
 
-def _in_grid_bounds(x: int, y: int, width: int, height: int) -> bool:
+def _in_grid_bounds(x, y, width, height):
     return 0 <= x < width and 0 <= y < height
 
 
-def bfs_distance(
-    start: Coord,
-    goal: Coord,
-    width: int,
-    height: int,
-    wall_cells: Set[Coord],
-) -> Optional[int]:
+def bfs_distance(start, goal, width, height, wall_cells):
     """Shortest 4-neighbor path length from `start` to `goal`, or None if unreachable."""
     if start == goal:
         return 0
-    gx, gy = goal
-    if not _in_grid_bounds(gx, gy, width, height) or (gx, gy) in wall_cells:
+    goal_x, goal_y = goal
+    if not _in_grid_bounds(goal_x, goal_y, width, height) or (goal_x, goal_y) in wall_cells:
         return None
 
-    q: deque[Coord] = deque([start])
-    dist: Dict[Coord, int] = {start: 0}
-    while q:
-        x, y = q.popleft()
-        d = dist[(x, y)]
-        for nx, ny in _grid_neighbors(x, y):
-            if not _in_grid_bounds(nx, ny, width, height):
+    queue = [start]
+    distances = {start: 0}
+    while queue:
+        x, y = queue.pop(0)
+        distance = distances[(x, y)]
+        for neighbor_x, neighbor_y in _grid_neighbors(x, y):
+            if not _in_grid_bounds(neighbor_x, neighbor_y, width, height):
                 continue
-            if (nx, ny) in wall_cells:
+            if (neighbor_x, neighbor_y) in wall_cells:
                 continue
-            if (nx, ny) in dist:
+            if (neighbor_x, neighbor_y) in distances:
                 continue
-            nd = d + 1
-            if (nx, ny) == goal:
-                return nd
-            dist[(nx, ny)] = nd
-            q.append((nx, ny))
+            new_distance = distance + 1
+            if (neighbor_x, neighbor_y) == goal:
+                return new_distance
+            distances[(neighbor_x, neighbor_y)] = new_distance
+            queue.append((neighbor_x, neighbor_y))
     return None

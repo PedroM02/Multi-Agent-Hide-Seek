@@ -1,16 +1,12 @@
-from __future__ import annotations
-
-from typing import Dict, List
-
 import agent_utils as au
 from environment import Environment
 
 
-def attribute_rewards(env: Environment, captured_prey_ids: List[int]) -> Dict[int, float]:
-    rewards: Dict[int, float] = {bid: 0.0 for bid in env.agent_bodies}
+def attribute_rewards(env, captured_prey_ids):
+    rewards = {agent_id: 0.0 for agent_id in env.agent_bodies}
     if not captured_prey_ids:
         return rewards
-    for b in env.agent_bodies.values():
-        if b.team == au.TEAM_PREDATOR and b.alive:
-            rewards[b.agent_id] += 1.0
+    for body in env.agent_bodies.values():
+        if body.team == au.TEAM_PREDATOR and body.alive:
+            rewards[body.agent_id] += 1.0
     return rewards
