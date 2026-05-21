@@ -127,6 +127,7 @@ class SimulationConfig:
         # See `SimulationState._resolve_knockouts` for the full rules.
         self.prey_defend: Optional[str] = None
         self.stun_duration: int = 3
+        self.enable_flanking: bool = True
 
 
 def copy_config(base: SimulationConfig, **overrides) -> SimulationConfig:
@@ -145,6 +146,7 @@ def copy_config(base: SimulationConfig, **overrides) -> SimulationConfig:
     c.enable_comms = base.enable_comms
     c.prey_defend = base.prey_defend
     c.stun_duration = base.stun_duration
+    c.enable_flanking = base.enable_flanking
     for k, v in overrides.items():
         setattr(c, k, v)
     return c
@@ -252,6 +254,7 @@ class SimulationState:
             ]
             assignments = select_team_roles(
                 team, team_ids, raw_obs, agents_by_id, self.env,
+                self.config.enable_flanking,
             )
             for aid, (role, target) in assignments.items():
                 a = agents_by_id[aid]

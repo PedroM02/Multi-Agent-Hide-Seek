@@ -22,8 +22,91 @@ def _apply_action(x: int, y: int, action: str) -> Tuple[int, int]:
 # Team-level role selector. Currently trivial; kept as the entry point
 # for future hunting / protection strategies.
 # ---------------------------------------------------------------------------
+def select_team_roles(
+    team: str,
+    team_ids: List[int],
+    obs_by_id: Dict[int, dict],
+    agents_by_id: Dict[int, Any],
+    env: Environment,
+    enable_flanking: bool = True,
 
+) -> Dict[int, Tuple[str, Optional[Tuple[int, int]]]]:
+    if not team_ids:
+        return {}
+    if team == au.TEAM_PREY:
+        return {aid: (au.ROLE_FLEE, None) for aid in team_ids}
+    if not enable_flanking or len(team_ids) < 2:
+        return {aid: (au.ROLE_CHASER, None) for aid in team_ids}
 
+    # collect all prey positions visible to any predator on the team
+    visible_prey: List[Tuple[int, int]] = []
+    for aid in team_ids:
+        for ex, ey, _ in obs_by_id[aid]["active_enemies"]:
+            if (ex, ey) not in visible_prey:
+                visible_prey.append((ex, ey))
+
+    # if no predator can see any prey, everyone wanders as chaser
+    if not visible_prey:
+        return {aid: (au.ROLE_CHASER, None) for aid in team_ids}
+    
+    # find closest predator-prey pair
+    best_dist = float("inf")
+    chaser_id = team_ids[0]
+    chase_target = visible_prey[0]
+
+    for aid in team_ids:
+        body = env.agent_bodies[aid]
+        for px, py in visible_prey:
+            d = manhattan(body.x, body.y, px, py)
+            if d < best_dist:
+                best_dist = d
+                chaser_id = aid
+                chase_target = (px, py)
+
+    # assign roles
+    result = {}
+    used_flank_options = []
+    for aid in team_ids:
+        if aid == chaser_id:
+            result[aid] = (au.ROLE_CHASER, chase_target)
+        else:
+            # only assign flanker target if this predator can see the prey
+            can_see_prey = any(
+                (ex, ey) == chase_target
+                for ex, ey, _ in obs_by_id[aid]["active_enemies"]
+            )
+            if not can_see_prey:
+                result[aid] = (au.ROLE_CHASER, None)  # wanders
+                continue
+            chaser_body = env.agent_bodies[chaser_id]
+            body = env.agent_bodies[aid]
+            px, py = chase_target
+            dx = px - chaser_body.x
+            dy = py - chaser_body.y
+            perp_x, perp_y = -dy, dx
+
+            option1 = (max(0, min(env.width - 1, px + perp_x)), max(0, min(env.height - 1, py + perp_y)))
+            option2 = (max(0, min(env.width - 1, px - perp_x)), max(0, min(env.height - 1, py - perp_y)))
+
+            # pick the closer option that hasn't been taken by another flanker
+            d1 = manhattan(body.x, body.y, option1[0], option1[1])
+            d2 = manhattan(body.x, body.y, option2[0], option2[1])
+
+            if option1 not in used_flank_options and option2 not in used_flank_options:
+                # both free — pick closer one
+                chosen = option1 if d1 <= d2 else option2
+            elif option1 in used_flank_options:
+                chosen = option2
+            elif option2 in used_flank_options:
+                chosen = option1
+            else:
+                # both taken (unlikely but safe fallback)
+                chosen = option1 if d1 <= d2 else option2
+
+            used_flank_options.append(chosen)
+            result[aid] = (au.ROLE_FLANKER, chosen)
+    return result
+"""
 def select_team_roles(
     team: str,
     team_ids: List[int],
@@ -31,18 +114,19 @@ def select_team_roles(
     agents_by_id: Dict[int, Any],
     env: Environment,
 ) -> Dict[int, Tuple[str, Optional[Tuple[int, int]]]]:
-    """Assign (role, role_target) to every alive agent in `team`.
+    Assign (role, role_target) to every alive agent in `team`.
 
     Currently trivial: predators all become CHASER, prey all become FLEE.
     The function is kept as the single hook for future role logic — when
     a richer role taxonomy is reintroduced it slots in here and
     `DecisionMaking.choose_action` learns to dispatch on it.
-    """
+    
     if not team_ids:
         return {}
     if team == au.TEAM_PREDATOR:
         return {aid: (au.ROLE_CHASER, None) for aid in team_ids}
     return {aid: (au.ROLE_FLEE, None) for aid in team_ids}
+    """
 
 
 # ---------------------------------------------------------------------------
@@ -70,6 +154,8 @@ class DecisionMaking:
             return au.STAY, False
 
         if obs["team"] == au.TEAM_PREDATOR:
+            if obs.get("role") == au.ROLE_FLANKER:
+                return self._flank(obs, legal)
             return self._chase(obs, last_seen_enemy, legal)
         return self._flee(obs, last_seen_enemy, legal)
 
@@ -95,6 +181,26 @@ class DecisionMaking:
         tx, ty = target
         if stale and ego_x == tx and ego_y == ty:
             return self._rng.choice(legal), True
+        return self._navigate_to(ego_x, ego_y, tx, ty, legal), False
+    
+    def _flank(
+        self,
+        obs: dict,
+        legal: List[str],
+    ) -> Tuple[str, bool]:
+        role_target = obs.get("role_target")
+        ego_x, ego_y = obs["ego_x"], obs["ego_y"]
+
+        if role_target is None:
+            # no target assigned, fall back to chasing
+            return self._chase(obs, None, legal)
+
+        tx, ty = role_target
+
+        # if we reached the flank position, stay put and wait
+        if ego_x == tx and ego_y == ty:
+            return au.STAY, False
+
         return self._navigate_to(ego_x, ego_y, tx, ty, legal), False
 
     def _flee(

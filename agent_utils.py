@@ -35,8 +35,10 @@ OUTCOME_PREY_WIN = "Prey Win"
 # protection variants) will be added back as the selector grows.
 ROLE_CHASER = "chaser"
 ROLE_FLEE = "flee"
+ROLE_FLANKER = "flanker"
 
 ROLE_LETTER = {
     ROLE_CHASER: "C",
     ROLE_FLEE: "F",
+    ROLE_FLANKER: "K",
 }

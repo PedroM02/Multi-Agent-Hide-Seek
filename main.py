@@ -32,6 +32,7 @@ def main() -> None:
     parser.add_argument("--walls", type=int, default=2, dest="num_walls", help="Number of wall segments to generate randomly.",)
     parser.add_argument("--wall-size", type=int, default=2, dest="wall_size", help="Length (in cells) of each randomly generated wall segment.",)
     parser.add_argument("--comms", action="store_true", help="Enable team communications (opt-in). Each agent broadcasts directly-visible enemies to teammates inside its vision radius; receivers fall back from direct sight to teammate reports to memory.",)
+    parser.add_argument("--enable-flanking", action="store_true", default=False)
     parser.add_argument(
         "--prey-defend",
         choices=["stun", "kill"],
@@ -62,6 +63,7 @@ def main() -> None:
     config.wall_size = args.wall_size
     config.enable_comms = args.comms
     config.prey_defend = args.prey_defend
+    config.enable_flanking = args.enable_flanking
 
     if args.gui:
         from visualization import run_visualization
