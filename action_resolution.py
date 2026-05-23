@@ -1,5 +1,4 @@
 import agent_utils as au
-from environment import Environment
 
 
 def _target_cell(env, agent_id, action, move_intentions):
@@ -40,7 +39,7 @@ def _target_cell(env, agent_id, action, move_intentions):
     return (target_x, target_y)
 
 
-def resolve_actions(env, intentions, rng):
+def resolve_actions(env, intentions):
     alive_ids = [
         agent_id for agent_id, body in env.agent_bodies.items() if body.alive
     ]
@@ -113,5 +112,3 @@ def resolve_actions(env, intentions, rng):
 
     for agent_id, (x, y) in final_pos.items():
         env.set_position(agent_id, x, y)
-
-    return {"intended": dict(intentions), "final_positions": final_pos}

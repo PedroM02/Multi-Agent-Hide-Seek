@@ -3,7 +3,6 @@ import random
 import pygame
 
 import agent_utils as au
-from environment import Environment
 from simulation import (
     BatchSummary,
     SimulationConfig,

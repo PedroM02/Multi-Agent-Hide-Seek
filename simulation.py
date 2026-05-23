@@ -101,22 +101,13 @@ def _dedupe_enemy_messages(messages):
     seen_keys = set()
     deduped = []
     for message in messages:
-        if len(message) == 4:
-            sender_id, enemy_x, enemy_y, enemy_id = message
-            key = (sender_id, enemy_id)
-        else:
-            enemy_x, enemy_y, enemy_id = message
-            key = (None, enemy_id)
+        sender_id, enemy_x, enemy_y, enemy_id = message
+        key = (sender_id, enemy_id)
         if key in seen_keys:
             continue
         seen_keys.add(key)
-        if len(message) == 4:
-            deduped.append((sender_id, enemy_x, enemy_y, enemy_id))
-        else:
-            deduped.append((enemy_x, enemy_y, enemy_id))
-    deduped.sort(
-        key=lambda t: (t[0], t[3], t[1], t[2]) if len(t) == 4 else (t[2], t[0], t[1]),
-    )
+        deduped.append((sender_id, enemy_x, enemy_y, enemy_id))
+    deduped.sort(key=lambda t: (t[0], t[3], t[1], t[2]))
     return tuple(deduped)
 
 
@@ -355,7 +346,6 @@ class SimulationState:
         for obs in raw_obs.values():
             if obs["team"] != au.TEAM_PREDATOR:
                 continue
-            obs["oracle_prey"] = oracle
             obs["wall_cells"] = walls
             obs["grid_width"] = grid_width
             obs["grid_height"] = grid_height
@@ -461,7 +451,7 @@ class SimulationState:
         if self.config.prey_defend is not None:
             self._resolve_knockouts(intentions, self.config.prey_defend)
 
-        resolve_actions(self.env, intentions, self.rng)
+        resolve_actions(self.env, intentions)
         captured = self.env.apply_captures()
         rewards = attribute_rewards(self.env, captured)
         for agent_id, reward in rewards.items():

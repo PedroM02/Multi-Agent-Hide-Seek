@@ -1,4 +1,3 @@
-from environment import Environment
 from distances import chebyshev
 
 

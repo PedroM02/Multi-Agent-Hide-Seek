@@ -1,5 +1,4 @@
 import agent_utils as au
-from environment import Environment
 
 
 def attribute_rewards(env, captured_prey_ids):

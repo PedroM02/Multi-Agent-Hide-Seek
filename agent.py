@@ -49,7 +49,7 @@ class Agent:
             active = obs["active_enemies"]
             if active:
                 visible_position = self.perception.update_last_seen_enemy(
-                    obs["agent_x"], obs["agent_y"], self.team, active, self.rng,
+                    obs["agent_x"], obs["agent_y"], active, self.rng,
                 )
                 if visible_position is not None:
                     self.last_seen_enemy = visible_position

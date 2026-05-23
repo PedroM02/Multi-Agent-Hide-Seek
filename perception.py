@@ -32,7 +32,6 @@ class Perception:
         self,
         agent_x,
         agent_y,
-        team,
         visible_enemies,
         rng,
     ):

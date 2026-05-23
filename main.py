@@ -1,19 +1,6 @@
-from simulation import BatchSummary, SimulationConfig, format_batch_summary, run_batch
+from simulation import SimulationConfig, format_batch_summary, run_batch
 
 import argparse
-
-
-def _parse_walls(raw):
-    if not raw:
-        return None
-    out = []
-    for part in raw.split(";"):
-        part = part.strip()
-        if not part:
-            continue
-        xs, ys = part.split(",")
-        out.append((int(xs.strip()), int(ys.strip())))
-    return out
 
 
 def main():
