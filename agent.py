@@ -25,7 +25,7 @@ class Agent:
         self.role = None
         self.role_target = None
 
-    def prepare_observation(self, obs, shared_enemies):
+    def prepare_observation(self, obs, shared_enemies, shared_allies=()):
         """Fuse the raw observation with teammate reports.
 
         Run once per step before the role selector and before decide. The
@@ -35,6 +35,7 @@ class Agent:
         they can never disagree about who the threat is.
         """
         obs["shared_enemies"] = shared_enemies
+        obs["shared_allies"] = shared_allies
         obs["active_enemies"] = self.perception.compute_active_enemies(
             obs["visible_enemies"], shared_enemies,
         )

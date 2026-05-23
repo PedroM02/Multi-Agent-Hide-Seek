@@ -253,6 +253,8 @@ class DecisionMaking:
                 return self._random_move(legal), False
             if self.mode == au.MODE_OPTIMAL:
                 return self._optimal(obs, legal), False
+            if self.mode == au.MODE_PACK:
+                return self._pack(obs, last_seen_enemy, legal)
             if self.mode == au.MODE_ROLES and obs.get("role") == au.ROLE_FLANKER:
                 return self._flank(obs, legal)
             return self._chase(obs, last_seen_enemy, legal)
@@ -299,6 +301,89 @@ class DecisionMaking:
         if stale and agent_x == target_x and agent_y == target_y:
             return self.rng.choice(legal), True
         return self._navigate_to(agent_x, agent_y, target_x, target_y, legal), False
+
+    def _pack(self, obs, last_seen_enemy, legal):
+        """Level 4: local pack reasoning — no simulation-assigned targets.
+
+        A pack exists when this predator sees at least one ally, or has
+        received ally positions via two-pass pack comms. Prey candidates
+        are the union of own sightings and teammate reports
+        (``shared_enemies``), not ``active_enemies`` alone. Peer positions
+        include self, ``visible_allies``, and ``shared_allies`` (relay).
+        """
+        visible_allies = obs.get("visible_allies", ())
+        shared_allies = obs.get("shared_allies", ())
+        if not visible_allies and not shared_allies:
+            return self._chase(obs, last_seen_enemy, legal)
+
+        agent_x, agent_y = obs["agent_x"], obs["agent_y"]
+        peer_positions = self._pack_peer_positions(obs)
+        cohesion_allies = visible_allies + shared_allies
+
+        prey_candidates = self._pack_prey_candidates(obs)
+        target = self._pick_pack_prey(peer_positions, prey_candidates)
+        if target is not None:
+            target_x, target_y = target
+            return self._navigate_to(
+                agent_x, agent_y, target_x, target_y, legal,
+            ), False
+
+        return self._wander_with_cohesion(
+            agent_x, agent_y, legal, cohesion_allies,
+        ), False
+
+    def _pack_peer_positions(self, obs):
+        """Self plus every known pack ally (direct and relayed)."""
+        agent_x, agent_y = obs["agent_x"], obs["agent_y"]
+        peer_positions = [(agent_x, agent_y)]
+        seen_ids = {obs["agent_id"]}
+        for source in (
+            obs.get("visible_allies", ()),
+            obs.get("shared_allies", ()),
+        ):
+            for ally_x, ally_y, ally_id in source:
+                if ally_id in seen_ids:
+                    continue
+                seen_ids.add(ally_id)
+                peer_positions.append((ally_x, ally_y))
+        return peer_positions
+
+    def _pack_prey_candidates(self, obs):
+        """Own direct prey plus prey reported by visible allies via comms."""
+        seen_ids = set()
+        candidates = []
+        for source in (
+            obs.get("visible_enemies", ()),
+            obs.get("shared_enemies", ()),
+        ):
+            for enemy_x, enemy_y, enemy_id in source:
+                if enemy_id in seen_ids:
+                    continue
+                seen_ids.add(enemy_id)
+                candidates.append((enemy_x, enemy_y, enemy_id))
+        candidates.sort(key=lambda t: (t[2], t[0], t[1]))
+        return candidates
+
+    def _pick_pack_prey(self, peer_positions, prey_candidates):
+        """Prey minimizing sum of Manhattan distances from pack peers."""
+        if not prey_candidates:
+            return None
+
+        best_target = None
+        best_score = None
+        best_id = None
+        for prey_x, prey_y, prey_id in prey_candidates:
+            total = sum(
+                manhattan(px, py, prey_x, prey_y)
+                for px, py in peer_positions
+            )
+            if best_score is None or total < best_score or (
+                total == best_score and prey_id < best_id
+            ):
+                best_score = total
+                best_target = (prey_x, prey_y)
+                best_id = prey_id
+        return best_target
 
     def _flank(self, obs, legal):
         role_target = obs.get("role_target")

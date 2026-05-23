@@ -32,13 +32,15 @@ def main():
     parser.add_argument("--wall-size", type=int, default=2, dest="wall_size", help="Length (in cells) of each randomly generated wall segment.",)
     parser.add_argument(
         "--mode",
-        choices=["random", "chase", "roles", "optimal"],
+        choices=["random", "chase", "pack", "roles", "optimal"],
         default="chase",
         help=(
             "Predator decision mode. random: Level 1. chase: Level 2 "
-            "(add --comms for Level 3). roles: Level 4 team roles "
-            "with chaser/flanker coordination. optimal: Level 6 "
-            "clairvoyant BFS with shared pack focus."
+            "(add --comms for Level 3). pack: Level 4 pack "
+            "hunting with shared prey focus (requires --comms predators "
+            "or both). roles: Level 5 team roles "
+            "with chaser/flanker coordination.  optimal: Level 6 clairvoyant BFS with shared "
+            "pack focus."
         ),
     )
     parser.add_argument(
@@ -85,6 +87,9 @@ def main():
     config.mode = args.mode
     config.comms = args.comms
     config.prey_defend = args.prey_defend
+
+    if config.mode == "pack" and config.comms not in ("predators", "both"):
+        parser.error("--mode pack requires --comms predators or --comms both")
 
     if args.gui:
         from visualization import run_visualization

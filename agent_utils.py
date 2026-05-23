@@ -34,6 +34,7 @@ MODE_RANDOM = "random"
 MODE_CHASE = "chase"
 MODE_ROLES = "roles"
 MODE_OPTIMAL = "optimal"
+MODE_PACK = "pack"
 
 # Agent roles. Active only when mode is "roles"
 ROLE_CHASER = "chaser"

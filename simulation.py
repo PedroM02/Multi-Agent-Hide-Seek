@@ -89,6 +89,62 @@ def _alive_oracle_prey(env):
     return tuple(prey)
 
 
+def _dedupe_enemy_messages(messages):
+    seen_ids = set()
+    deduped = []
+    for enemy_x, enemy_y, enemy_id in messages:
+        if enemy_id in seen_ids:
+            continue
+        seen_ids.add(enemy_id)
+        deduped.append((enemy_x, enemy_y, enemy_id))
+    deduped.sort(key=lambda t: (t[2], t[0], t[1]))
+    return tuple(deduped)
+
+
+def _dedupe_ally_messages(messages):
+    seen_ids = set()
+    deduped = []
+    for ally_x, ally_y, ally_id in messages:
+        if ally_id in seen_ids:
+            continue
+        seen_ids.add(ally_id)
+        deduped.append((ally_x, ally_y, ally_id))
+    deduped.sort(key=lambda t: (t[2], t[0], t[1]))
+    return tuple(deduped)
+
+
+def _comms_round(raw_obs, config, enemy_payloads, ally_payloads):
+    """One synchronous fan-out round for enemies and/or allies."""
+    shared_enemies = {agent_id: [] for agent_id in raw_obs}
+    shared_allies = {agent_id: [] for agent_id in raw_obs}
+    for sender_obs in raw_obs.values():
+        if not comms_enabled_for_team(config, sender_obs["team"]):
+            continue
+        sender_id = sender_obs["agent_id"]
+        enemies = enemy_payloads.get(sender_id, ())
+        allies = ally_payloads.get(sender_id, ())
+        if not enemies and not allies:
+            continue
+        for _, _, ally_id in sender_obs["visible_allies"]:
+            if ally_id not in shared_enemies:
+                continue
+            if enemies:
+                shared_enemies[ally_id].extend(enemies)
+            if allies:
+                shared_allies[ally_id].extend(allies)
+
+    return (
+        {
+            agent_id: _dedupe_enemy_messages(messages)
+            for agent_id, messages in shared_enemies.items()
+        },
+        {
+            agent_id: _dedupe_ally_messages(messages)
+            for agent_id, messages in shared_allies.items()
+        },
+    )
+
+
 def _exchange_team_messages(raw_obs, config):
     """Speaker-centric, single-hop, synchronous team comms.
 
@@ -99,29 +155,44 @@ def _exchange_team_messages(raw_obs, config):
     sightings are not filtered out here — priority handling lives in
     Agent.decide. Agents on teams with comms disabled do not send.
     """
-    shared = {agent_id: [] for agent_id in raw_obs}
-    for sender_obs in raw_obs.values():
-        if not comms_enabled_for_team(config, sender_obs["team"]):
-            continue
-        sightings = sender_obs["visible_enemies"]
-        if not sightings:
-            continue
-        for ally_x, ally_y, ally_id in sender_obs["visible_allies"]:
-            if ally_id in shared:
-                shared[ally_id].extend(sightings)
+    enemy_payloads = {
+        obs["agent_id"]: obs["visible_enemies"] for obs in raw_obs.values()
+    }
+    shared_enemies, _ = _comms_round(
+        raw_obs, config, enemy_payloads, {},
+    )
+    return shared_enemies
 
-    out = {}
-    for agent_id, messages in shared.items():
-        seen_ids = set()
-        deduped = []
-        for enemy_x, enemy_y, enemy_id in messages:
-            if enemy_id in seen_ids:
-                continue
-            seen_ids.add(enemy_id)
-            deduped.append((enemy_x, enemy_y, enemy_id))
-        deduped.sort(key=lambda t: (t[2], t[0], t[1]))
-        out[agent_id] = tuple(deduped)
-    return out
+
+def _exchange_pack_messages(raw_obs, config):
+    """Two-pass comms for `--mode pack`: relay enemies and ally positions.
+
+    Pass 1 broadcasts direct sightings. Pass 2 rebroadcasts the union of
+    direct and pass-1 reports, reaching teammates two hops away (enough
+    for a three-predator chain to share all prey and ally positions).
+    """
+    pass1_enemies = {
+        obs["agent_id"]: obs["visible_enemies"] for obs in raw_obs.values()
+    }
+    pass1_allies = {
+        obs["agent_id"]: obs["visible_allies"] for obs in raw_obs.values()
+    }
+    shared_enemies_p1, shared_allies_p1 = _comms_round(
+        raw_obs, config, pass1_enemies, pass1_allies,
+    )
+
+    pass2_enemies = {}
+    pass2_allies = {}
+    for obs in raw_obs.values():
+        agent_id = obs["agent_id"]
+        pass2_enemies[agent_id] = (
+            obs["visible_enemies"] + shared_enemies_p1[agent_id]
+        )
+        pass2_allies[agent_id] = (
+            obs["visible_allies"] + shared_allies_p1[agent_id]
+        )
+
+    return _comms_round(raw_obs, config, pass2_enemies, pass2_allies)
 
 
 class SimulationConfig:
@@ -282,13 +353,24 @@ class SimulationState:
                 self.env, agent.agent_id, radius,
             )
 
-        # Phase 2: synchronous, single-hop, speaker-centric team comms.
-        # Only agents on comms-enabled teams broadcast; receivers on
-        # disabled teams always get empty reports (direct sight + memory).
+        # Phase 2: synchronous, speaker-centric team comms.
+        # Pack mode uses two passes so a three-predator chain can relay
+        # prey and ally positions; all other modes stay single-hop.
         if self.config.comms is not None:
-            shared_enemies = _exchange_team_messages(raw_obs, self.config)
+            if self.config.mode == au.MODE_PACK:
+                shared_enemies, shared_allies = _exchange_pack_messages(
+                    raw_obs, self.config,
+                )
+            else:
+                shared_enemies = _exchange_team_messages(
+                    raw_obs, self.config,
+                )
+                shared_allies = {
+                    agent_id: tuple() for agent_id in raw_obs
+                }
         else:
             shared_enemies = {agent_id: tuple() for agent_id in raw_obs}
+            shared_allies = {agent_id: tuple() for agent_id in raw_obs}
 
         # Phase 2b: each agent fuses its direct sightings with the
         # teammate reports addressed to it, producing the
@@ -298,12 +380,15 @@ class SimulationState:
         # the agent "knows".
         agents_by_id = {agent.agent_id: agent for agent in self.agents}
         for agent_id, obs in raw_obs.items():
-            reports = (
-                shared_enemies[agent_id]
-                if comms_enabled_for_team(self.config, obs["team"])
-                else tuple()
+            if comms_enabled_for_team(self.config, obs["team"]):
+                enemy_reports = shared_enemies[agent_id]
+                ally_reports = shared_allies[agent_id]
+            else:
+                enemy_reports = tuple()
+                ally_reports = tuple()
+            agents_by_id[agent_id].prepare_observation(
+                obs, enemy_reports, ally_reports,
             )
-            agents_by_id[agent_id].prepare_observation(obs, reports)
 
         # Phase 2.5: oracle fields for Level 6 optimal modes.
         self._inject_oracle_obs(raw_obs)
