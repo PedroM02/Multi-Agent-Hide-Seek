@@ -3,7 +3,7 @@ import random
 import agent_utils as au
 from action_resolution import resolve_actions
 from agent import Agent, build_agents_for_env
-from decision_making import select_pack_prey_id, select_team_roles
+from decision_making import select_pack_prey_id
 from distances import chebyshev
 from environment import Environment
 from observation_definition import build_observation
@@ -89,15 +89,34 @@ def _alive_oracle_prey(env):
     return tuple(prey)
 
 
+def _tag_enemy_reports(sender_id, sightings):
+    """Attach sender_id to each direct enemy sighting for comms."""
+    return [
+        (sender_id, enemy_x, enemy_y, enemy_id)
+        for enemy_x, enemy_y, enemy_id in sightings
+    ]
+
+
 def _dedupe_enemy_messages(messages):
-    seen_ids = set()
+    seen_keys = set()
     deduped = []
-    for enemy_x, enemy_y, enemy_id in messages:
-        if enemy_id in seen_ids:
+    for message in messages:
+        if len(message) == 4:
+            sender_id, enemy_x, enemy_y, enemy_id = message
+            key = (sender_id, enemy_id)
+        else:
+            enemy_x, enemy_y, enemy_id = message
+            key = (None, enemy_id)
+        if key in seen_keys:
             continue
-        seen_ids.add(enemy_id)
-        deduped.append((enemy_x, enemy_y, enemy_id))
-    deduped.sort(key=lambda t: (t[2], t[0], t[1]))
+        seen_keys.add(key)
+        if len(message) == 4:
+            deduped.append((sender_id, enemy_x, enemy_y, enemy_id))
+        else:
+            deduped.append((enemy_x, enemy_y, enemy_id))
+    deduped.sort(
+        key=lambda t: (t[0], t[3], t[1], t[2]) if len(t) == 4 else (t[2], t[0], t[1]),
+    )
     return tuple(deduped)
 
 
@@ -150,13 +169,18 @@ def _exchange_team_messages(raw_obs, config):
 
     Every agent on a comms-enabled team broadcasts the enemies it directly
     sees this step to the teammates inside its own vision radius (its
-    visible_allies). The receiver collects everything it was told, deduped
-    by enemy_id, sorted deterministically. The receiver's own direct
-    sightings are not filtered out here — priority handling lives in
-    Agent.decide. Agents on teams with comms disabled do not send.
+    visible_allies). Each report is tagged with the sender's agent id:
+    ``(sender_id, enemy_x, enemy_y, enemy_id)``. The receiver collects
+    everything it was told, deduped by ``(sender_id, enemy_id)``, sorted
+    deterministically. The receiver's own direct sightings are not filtered
+    out here — priority handling lives in Agent.decide. Agents on teams with
+    comms disabled do not send.
     """
     enemy_payloads = {
-        obs["agent_id"]: obs["visible_enemies"] for obs in raw_obs.values()
+        obs["agent_id"]: _tag_enemy_reports(
+            obs["agent_id"], obs["visible_enemies"],
+        )
+        for obs in raw_obs.values()
     }
     shared_enemies, _ = _comms_round(
         raw_obs, config, enemy_payloads, {},
@@ -172,7 +196,10 @@ def _exchange_pack_messages(raw_obs, config):
     for a three-predator chain to share all prey and ally positions).
     """
     pass1_enemies = {
-        obs["agent_id"]: obs["visible_enemies"] for obs in raw_obs.values()
+        obs["agent_id"]: _tag_enemy_reports(
+            obs["agent_id"], obs["visible_enemies"],
+        )
+        for obs in raw_obs.values()
     }
     pass1_allies = {
         obs["agent_id"]: obs["visible_allies"] for obs in raw_obs.values()
@@ -186,7 +213,8 @@ def _exchange_pack_messages(raw_obs, config):
     for obs in raw_obs.values():
         agent_id = obs["agent_id"]
         pass2_enemies[agent_id] = (
-            obs["visible_enemies"] + shared_enemies_p1[agent_id]
+            _tag_enemy_reports(agent_id, obs["visible_enemies"])
+            + list(shared_enemies_p1[agent_id])
         )
         pass2_allies[agent_id] = (
             obs["visible_allies"] + shared_allies_p1[agent_id]
@@ -393,40 +421,17 @@ class SimulationState:
         # Phase 2.5: oracle fields for Level 6 optimal modes.
         self._inject_oracle_obs(raw_obs)
 
-        # Phase 2c: per-team role assignment (Level 4 only, `--mode roles`).
-        # Levels 1–3 skip roles; agents keep role=None and the GUI draws
-        # no letter. Chase/random behavior lives in DecisionMaking.
-        if self.config.mode == au.MODE_ROLES:
-            for team in (au.TEAM_PREDATOR, au.TEAM_PREY):
-                team_ids = [
-                    agent_id
-                    for agent_id, observation in raw_obs.items()
-                    if observation["team"] == team
-                ]
-                assignments = select_team_roles(
-                    team, team_ids, raw_obs, agents_by_id, self.env,
-                )
-                for agent_id, (role, target) in assignments.items():
-                    agent = agents_by_id[agent_id]
-                    agent.role = role
-                    agent.role_target = target
-        else:
-            for agent_id in raw_obs:
-                agent = agents_by_id[agent_id]
-                agent.role = None
-                agent.role_target = None
-
         # Phase 3: agents decide using direct sightings, then teammate
-        # reports, then their own memory — now within their assigned role.
+        # reports, then their own memory. Roles are derived locally
+        # inside each agent in `--mode roles`.
         intentions = {}
         for agent in self.agents:
             body = self.env.agent_bodies[agent.agent_id]
             if not body.alive:
                 continue
-            obs = dict(raw_obs[agent.agent_id])
-            obs["role"] = agent.role
-            obs["role_target"] = agent.role_target
-            intentions[agent.agent_id] = agent.decide(obs)
+            intentions[agent.agent_id] = agent.decide(
+                raw_obs[agent.agent_id],
+            )
 
         # Phase 4: cooperative-knockout system (opt-in via
         # --prey-defend). Up to two passes, both gated on the

@@ -54,9 +54,9 @@ Movement rules at the action-resolution stage
 - **Same-team agents never share a cell.** If a teammate is currently on
   the target cell and is staying this step (any zero-delta action), the
   entry is denied. If the teammate is itself moving away, the entry
-  falls through to the same-team collision pass, which uses a random
-  winner with forced-stay propagation in case the teammate's own move
-  ends up blocked.
+  falls through to the same-team collision pass, which gives the cell to
+  the lowest agent id among claimants, with forced-stay propagation in
+  case the teammate's own move ends up blocked.
 - **Cross-team co-location is one-directional.** A predator stepping
   onto a prey cell is the capture mechanic and is allowed. Prey moving
   onto a predator cell is always denied — there is no symmetric "prey
@@ -182,6 +182,11 @@ the prey survives.
 
 ### Design notes
 
+- **Limitation — prey do not choose to defend.** The knockout system is
+  an environmental response to geometry, not prey decision-making. Prey
+  agents still run their normal flee policy; the simulation may override
+  sandwicher prey to STAY after the fact. Cooperative defence is not
+  modelled as a prey action or strategy in this project.
 - Prey observations do not change. Prey still see stunned
   predators as enemies; their flee logic still treats them as
   threats. This is intentional: a stunned predator's stun window
@@ -215,13 +220,21 @@ Prey behavior is unchanged across levels (flee, optional stun/kill).
 | 1 | `random` | off | none | Uniform random over `legal_actions` each step |
 | 2 | `chase` | off | none | Greedy Manhattan pursuit (`DecisionMaking._chase`) |
 | 3 | `chase` | `predators` / `both` | none | Same chase as Level 2; teammate enemy reports augment perception |
-| 4 | `roles` | optional | enabled | Chaser/flanker coordination via `select_team_roles` |
-| 5 | `pack` | `predators` / `both` **required** | none | Per-agent pack reasoning: visible allies + comms prey reports; min sum Manhattan; cohesive search when no prey known |
+| 4 | `roles` | optional | enabled | Per-agent chaser/flanker derivation (`derive_role`); single-hop comms |
+| 5 | `pack` | `predators` / `both` **required** | none | Per-agent pack reasoning: visible allies + comms prey reports; min sum Manhattan; `_chase` fallback when no prey known |
 | 6 | `optimal` | off | none | Clairvoyant BFS; all predators share one focus prey until captured |
 
 Levels 1–3 and 5 draw **no role letters** in the GUI (`Agent.role` stays `None`).
-Chase logic is unchanged in Levels 2–3; only the role label and assignment
-layer are removed until Level 4.
+
+Level 4 (`--mode roles`) uses single-hop comms (same as chase). Each predator
+derives its role locally in [`DecisionMaking.derive_role`](decision_making.py):
+focus prey is the candidate minimizing the sum of Manhattan distances from
+self plus `visible_allies` (Option B); the chaser is the closest known peer
+to that prey; flankers take one-step perpendicular cells beside the prey
+(id-ordered slot picking). Flank eligibility for other allies uses
+Chebyshev range to the focus prey or a comms report attributed to that
+ally — visible co-presence alone is not enough. Predators without a role target use `_chase`.
+Solo predators fall back to `_chase`. Prey get `ROLE_FLEE` for display.
 
 Level 5 (`--mode pack`) requires `--comms predators` or `--comms both`.
 Pack mode uses **two-pass comms** ([`_exchange_pack_messages`](simulation.py)):
@@ -237,13 +250,13 @@ are self plus `visible_allies` and `shared_allies`; the chosen prey
 minimizes the sum of Manhattan distances from those peers (tiebreak:
 lowest prey id). Pack members with the same relayed view independently
 reach the same target. Solo predators fall back to `_chase`. With allies
-but no known prey, pack members search cohesively.
+but no known prey, pack members also fall back to `_chase`.
 
 Level 6 is **clairvoyant**: predators receive true prey positions
 each step via [`distances.bfs_distance`](distances.py) and path-step helpers in [`decision_making.py`](decision_making.py).
 Same-team destination clashes are **not** planned away; the existing
-[`action_resolution`](action_resolution.py) pass resolves them (random
-winner, forced STAY cascade).
+[`action_resolution`](action_resolution.py) pass resolves them (lowest
+agent id wins, forced STAY cascade).
 
 ---
 
@@ -262,7 +275,9 @@ The per-step pipeline lives in [`simulation.py`](simulation.py)
    behaves as if comms were off (direct sight + memory only). There is
    no cross-team messaging. Each enabled speaker broadcasts its
    directly-visible enemies to the teammates inside its own vision radius
-   (the `visible_allies` it currently sees). Comms are single-hop,
+   (the `visible_allies` it currently sees). Each report is tagged with
+   the sender's agent id as ``(sender_id, enemy_x, enemy_y, enemy_id)``.
+   Comms are single-hop,
    synchronous, and speaker-centric — see
    [`simulation._exchange_team_messages`](simulation.py). The fan-out
    means a receiver may know about an enemy slightly outside its own
@@ -275,7 +290,8 @@ The per-step pipeline lives in [`simulation.py`](simulation.py)
    [`Perception.compute_active_enemies`](perception.py). The fusion
    rule is strict priority:
    - if any direct sightings, use those;
-   - else if any teammate reports, use those;
+   - else if any teammate reports, use those (sender tags stripped for
+     `active_enemies`; raw `shared_enemies` keeps attribution);
    - else empty.
    The simulation only orchestrates the call — the agent (through its
    perception module) decides what it "knows". The result lives on
@@ -285,28 +301,28 @@ The per-step pipeline lives in [`simulation.py`](simulation.py)
    memory is refreshed via
    [`Perception.update_last_seen_enemy`](perception.py) — the fresher
    signal (own eyes or a teammate's eyes) wipes out any older memory.
-4. **Role assignment** (Level 4 only, `--mode roles`). Skipped for
-   Levels 1–3 and 5; agents keep `role=None`. When enabled, the team role
-   selector writes `(role, role_target)` onto every Agent (see "Roles").
-5. **Per-agent decision.** Each agent's `Agent.decide` calls
+4. **Per-agent decision.** Each agent owns its own [`Perception`](perception.py)
+   instance (no shared mutable state across agents). Each agent's
+   `Agent.decide` calls
    `DecisionMaking.choose_action` with the comms-augmented obs plus
-   `last_seen_enemy`. Predators dispatch on `--mode` (`random`, `chase`,
-   `pack`, `roles`, or `optimal`); prey always flee. In `--mode pack`,
-   pack prey selection lives entirely in `DecisionMaking._pack` — the
-   simulation does not assign targets. The chosen action goes back to
-   action resolution.
-6. **Knockout system** (optional, opt-in via
+   `last_seen_enemy`. In `--mode roles`, `derive_role` runs inside
+   `decide` before action selection. Predators dispatch on `--mode`
+   (`random`, `chase`, `pack`, `roles`, or `optimal`); prey always flee.
+   In `--mode pack`, pack prey selection lives entirely in
+   `DecisionMaking._pack`. The chosen action goes back to action
+   resolution.
+5. **Knockout system** (optional, opt-in via
    `--prey-defend {stun,kill}`). Sits between decisions and the
    resolver. Two phases:
-   - 4a (`stun` mode only): predators with `stun_remaining > 0`
+   - 5a (`stun` mode only): predators with `stun_remaining > 0`
      from a previous step have their action overridden to STAY.
-   - 4b: `_resolve_knockouts` runs the cooperative-knockout pass,
+   - 5b: `_resolve_knockouts` runs the cooperative-knockout pass,
      defeating up to `n - 1` predators per prey group and forcing
      the sandwicher prey to STAY. The defeat effect is mode-
      specific: `stun` writes `stun_remaining`, `kill` flips
      `alive` to False. See "Prey-defend (cooperative knockout)"
      above for the full rules.
-7. **Resolution, capture, and stun decrement.** Action resolver
+6. **Resolution, capture, and stun decrement.** Action resolver
    runs over the (possibly overridden) intentions; the capture
    pass skips stunned and dead predators (both branches handled
    by `apply_captures` reading `stun_remaining` and `alive`);
@@ -315,31 +331,29 @@ The per-step pipeline lives in [`simulation.py`](simulation.py)
    a "no predators left → prey win" path on top of the existing
    "no prey left → predators win" and "timeout" rules.
 
-This ordering makes the contract simple: the selector and the
-agent both consume the same `active_enemies` set, so they cannot
-disagree about who the threat is or where it is. The knockout
-system is purely additive — when `--prey-defend` is omitted, step
-6 and the stun-aware parts of step 7 collapse to no-ops and the
-rest of the pipeline is unchanged.
+This ordering keeps perception fusion on the agent before any action
+selection. The knockout system is purely additive — when `--prey-defend`
+is omitted, step 5 and the stun-aware parts of step 6 collapse to
+no-ops and the rest of the pipeline is unchanged.
 
 ---
 
 ## Roles
 
-Roles are **inactive** for Levels 1–3 (`--mode random` or `chase`).
-The GUI shows team color only — no `C`/`F` letters.
+Roles are **inactive** for Levels 1–3, 5, and 6. The GUI shows team
+color only — no `C`/`F`/`K` letters outside `--mode roles`.
 
-When Level 4 lands (`--mode roles`), [`decision_making.select_team_roles`](decision_making.py)
-will run each step and thread `(role, role_target)` into observations.
-The initial taxonomy (predators `ROLE_CHASER`, prey `ROLE_FLEE`) is
-preserved in code for that mode:
+In `--mode roles`, each agent calls [`DecisionMaking.derive_role`](decision_making.py)
+before choosing an action. Predators with visible allies coordinate via
+local rules (see Level 4 above); prey are labelled `ROLE_FLEE` for the GUI.
 
 | Role | Team | Per-step behaviour |
 |------|------|--------------------|
-| `ROLE_CHASER` | predator | Greedy min-Manhattan chase (same as `--mode chase`) |
+| `ROLE_CHASER` | predator | Chase `role_target` or `_chase` fallback |
+| `ROLE_FLANKER` | predator | Navigate to perpendicular flank cell; STAY when reached |
 | `ROLE_FLEE` | prey | Flee scoring below |
 
-Levels 2–3 use `_chase` / `_flee` directly without going through roles.
+Levels 2–3 use `_chase` / `_flee` directly without role derivation.
 
 ### Prey flee scoring
 

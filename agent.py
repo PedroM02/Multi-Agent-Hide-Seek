@@ -14,9 +14,7 @@ class Agent:
         self.decision = decision
         self.rng = rng
         self.last_seen_enemy = None
-        # Role assignment is written by the team role selector each step
-        # (see simulation.step_once). The role_target is sticky between
-        # selector calls when still valid; the selector itself preserves it.
+        # Written each step by derive_role in `--mode roles` (for GUI).
         self.role = None
         self.role_target = None
 
@@ -28,11 +26,9 @@ class Agent:
     def prepare_observation(self, obs, shared_enemies, shared_allies=()):
         """Fuse the raw observation with teammate reports.
 
-        Run once per step before the role selector and before decide. The
-        agent uses its perception module to collapse direct sight +
-        teammate reports into a single priority-resolved `active_enemies`
-        set; both the selector and decision logic consume that set, so
-        they can never disagree about who the threat is.
+        Run once per step before decide. The agent uses its perception
+        module to collapse direct sight + teammate reports into a single
+        priority-resolved `active_enemies` set.
         """
         obs["shared_enemies"] = shared_enemies
         obs["shared_allies"] = shared_allies
@@ -58,14 +54,25 @@ class Agent:
                 if visible_position is not None:
                     self.last_seen_enemy = visible_position
 
-        action, clear_memory = self.decision.choose_action(obs, self.last_seen_enemy)
+        obs_for_decision = obs
+        if self.decision.mode == au.MODE_ROLES:
+            self.role, self.role_target = self.decision.derive_role(obs)
+            obs_for_decision = dict(obs)
+            obs_for_decision["role"] = self.role
+            obs_for_decision["role_target"] = self.role_target
+        else:
+            self.role = None
+            self.role_target = None
+
+        action, clear_memory = self.decision.choose_action(
+            obs_for_decision, self.last_seen_enemy,
+        )
         if clear_memory:
             self.last_seen_enemy = None
         return action
 
 
 def build_agents_for_env(env, rng, config):
-    shared_perception = Perception()
     agents = []
     for body in sorted(env.agent_bodies.values(), key=lambda body: body.agent_id):
         # Each agent gets its own RNGs seeded from the parent — avoids
@@ -81,7 +88,7 @@ def build_agents_for_env(env, rng, config):
             Agent(
                 agent_id=body.agent_id,
                 team=body.team,
-                perception=shared_perception,
+                perception=Perception(),
                 decision=DecisionMaking(
                     random.Random(decision_seed), mode=decision_mode,
                 ),

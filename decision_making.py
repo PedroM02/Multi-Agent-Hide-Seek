@@ -14,6 +14,17 @@ def _apply_action(x, y, action):
     return x + delta_x, y + delta_y
 
 
+def _iter_enemy_sightings(*sources):
+    """Yield ``(enemy_x, enemy_y, enemy_id)`` from direct or comms reports."""
+    for source in sources:
+        for item in source:
+            if len(item) == 4:
+                sender_id, enemy_x, enemy_y, enemy_id = item
+            else:
+                enemy_x, enemy_y, enemy_id = item
+            yield enemy_x, enemy_y, enemy_id
+
+
 # ---------------------------------------------------------------------------
 # Grid path steps for Level 6 optimal modes (uses distances.bfs_distance).
 # ---------------------------------------------------------------------------
@@ -134,100 +145,6 @@ def select_pack_prey_id(
 
 
 # ---------------------------------------------------------------------------
-# Team-level role selector. Currently trivial; kept as the entry point
-# for future hunting / protection strategies.
-# ---------------------------------------------------------------------------
-def select_team_roles(
-    team,
-    team_ids,
-    obs_by_id,
-    agents_by_id,
-    env,
-):
-    """Assign (role, role_target) to every alive agent in `team`.
-
-    Prey become FLEE. Predators become CHASER, with non-chasing
-    teammates assigned FLANKER positions when the pack has multiple
-    members and shared prey visibility. Only called in `--mode roles`.
-    """
-    if not team_ids:
-        return {}
-    if team == au.TEAM_PREY:
-        return {aid: (au.ROLE_FLEE, None) for aid in team_ids}
-    if len(team_ids) < 2:
-        return {aid: (au.ROLE_CHASER, None) for aid in team_ids}
-
-    # collect all prey positions visible to any predator on the team
-    visible_prey = []
-    for aid in team_ids:
-        for ex, ey, _ in obs_by_id[aid]["active_enemies"]:
-            if (ex, ey) not in visible_prey:
-                visible_prey.append((ex, ey))
-
-    # if no predator can see any prey, everyone wanders as chaser
-    if not visible_prey:
-        return {aid: (au.ROLE_CHASER, None) for aid in team_ids}
-    
-    # find closest predator-prey pair
-    best_dist = float("inf")
-    chaser_id = team_ids[0]
-    chase_target = visible_prey[0]
-
-    for aid in team_ids:
-        body = env.agent_bodies[aid]
-        for px, py in visible_prey:
-            d = manhattan(body.x, body.y, px, py)
-            if d < best_dist:
-                best_dist = d
-                chaser_id = aid
-                chase_target = (px, py)
-
-    # assign roles
-    result = {}
-    used_flank_options = []
-    for aid in team_ids:
-        if aid == chaser_id:
-            result[aid] = (au.ROLE_CHASER, chase_target)
-        else:
-            # only assign flanker target if this predator can see the prey
-            can_see_prey = any(
-                (ex, ey) == chase_target
-                for ex, ey, _ in obs_by_id[aid]["active_enemies"]
-            )
-            if not can_see_prey:
-                result[aid] = (au.ROLE_CHASER, None)  # wanders
-                continue
-            chaser_body = env.agent_bodies[chaser_id]
-            body = env.agent_bodies[aid]
-            px, py = chase_target
-            dx = px - chaser_body.x
-            dy = py - chaser_body.y
-            perp_x, perp_y = -dy, dx
-
-            option1 = (max(0, min(env.width - 1, px + perp_x)), max(0, min(env.height - 1, py + perp_y)))
-            option2 = (max(0, min(env.width - 1, px - perp_x)), max(0, min(env.height - 1, py - perp_y)))
-
-            # pick the closer option that hasn't been taken by another flanker
-            d1 = manhattan(body.x, body.y, option1[0], option1[1])
-            d2 = manhattan(body.x, body.y, option2[0], option2[1])
-
-            if option1 not in used_flank_options and option2 not in used_flank_options:
-                # both free — pick closer one
-                chosen = option1 if d1 <= d2 else option2
-            elif option1 in used_flank_options:
-                chosen = option2
-            elif option2 in used_flank_options:
-                chosen = option1
-            else:
-                # both taken (unlikely but safe fallback)
-                chosen = option1 if d1 <= d2 else option2
-
-            used_flank_options.append(chosen)
-            result[aid] = (au.ROLE_FLANKER, chosen)
-    return result
-
-
-# ---------------------------------------------------------------------------
 # Per-agent action selection.
 # ---------------------------------------------------------------------------
 
@@ -255,8 +172,8 @@ class DecisionMaking:
                 return self._optimal(obs, legal), False
             if self.mode == au.MODE_PACK:
                 return self._pack(obs, last_seen_enemy, legal)
-            if self.mode == au.MODE_ROLES and obs.get("role") == au.ROLE_FLANKER:
-                return self._flank(obs, legal)
+            if self.mode == au.MODE_ROLES:
+                return self._roles(obs, last_seen_enemy, legal)
             return self._chase(obs, last_seen_enemy, legal)
         return self._flee(obs, last_seen_enemy, legal)
 
@@ -302,6 +219,172 @@ class DecisionMaking:
             return self.rng.choice(legal), True
         return self._navigate_to(agent_x, agent_y, target_x, target_y, legal), False
 
+    def derive_role(self, obs):
+        """Local role derivation for `--mode roles` (no simulation assignment)."""
+        if obs["team"] == au.TEAM_PREY:
+            return au.ROLE_FLEE, None
+        return self._derive_predator_role(obs)
+
+    def _derive_predator_role(self, obs):
+        if not obs.get("visible_allies", ()):
+            return au.ROLE_CHASER, None
+
+        peers = self._known_peers(obs, include_shared_allies=False)
+        prey_candidates = self._pack_prey_candidates(obs)
+        if not prey_candidates:
+            return au.ROLE_CHASER, None
+
+        peer_positions = [(x, y) for _, x, y in peers]
+        focus_prey = self._pick_pack_prey(peer_positions, prey_candidates)
+        if focus_prey is None:
+            return au.ROLE_CHASER, None
+
+        chaser_id = self._pick_chaser_id(peers, focus_prey)
+        my_id = obs["agent_id"]
+        if my_id == chaser_id:
+            return au.ROLE_CHASER, focus_prey
+
+        if not self._knows_prey_at(obs, focus_prey):
+            return au.ROLE_CHASER, None
+
+        flank_target = self._my_flank_target(obs, peers, chaser_id, focus_prey)
+        if flank_target is None:
+            return au.ROLE_CHASER, None
+        return au.ROLE_FLANKER, flank_target
+
+    def _roles(self, obs, last_seen_enemy, legal):
+        role = obs.get("role")
+        role_target = obs.get("role_target")
+        agent_x, agent_y = obs["agent_x"], obs["agent_y"]
+
+        if role == au.ROLE_FLANKER:
+            return self._flank(obs, legal)
+        if role == au.ROLE_CHASER and role_target is not None:
+            target_x, target_y = role_target
+            return self._navigate_to(
+                agent_x, agent_y, target_x, target_y, legal,
+            ), False
+        return self._chase(obs, last_seen_enemy, legal)
+
+    def _pick_chaser_id(self, peers, focus_prey):
+        focus_x, focus_y = focus_prey
+        best_id = None
+        best_dist = None
+        for peer_id, px, py in peers:
+            distance = manhattan(px, py, focus_x, focus_y)
+            if best_dist is None or distance < best_dist or (
+                distance == best_dist and peer_id < best_id
+            ):
+                best_dist = distance
+                best_id = peer_id
+        return best_id
+
+    def _knows_prey_at(self, obs, prey_pos):
+        px, py = prey_pos
+        for enemy_x, enemy_y, enemy_id in _iter_enemy_sightings(
+            obs.get("visible_enemies", ()),
+            obs.get("shared_enemies", ()),
+        ):
+            if (enemy_x, enemy_y) == (px, py):
+                return True
+        return False
+
+    def _ally_can_see_prey_at(self, obs, ally_x, ally_y, prey_pos):
+        px, py = prey_pos
+        return chebyshev(ally_x, ally_y, px, py) <= obs["vision_radius"]
+
+    def _peer_reported_prey_at(self, obs, peer_id, prey_pos):
+        px, py = prey_pos
+        for item in obs.get("shared_enemies", ()):
+            if len(item) != 4:
+                continue
+            sender_id, enemy_x, enemy_y, _ = item
+            if sender_id == peer_id and (enemy_x, enemy_y) == (px, py):
+                return True
+        return False
+
+    def _peer_can_see_focus_prey(self, obs, peer_id, ally_x, ally_y, focus_prey):
+        return (
+            self._ally_can_see_prey_at(obs, ally_x, ally_y, focus_prey)
+            or self._peer_reported_prey_at(obs, peer_id, focus_prey)
+        )
+
+    def _flanker_candidate_ids(self, obs, peers, chaser_id, focus_prey):
+        """Non-chaser peers eligible to flank (can see focus prey).
+
+        Self: prey at focus in visible or attributed comms reports. Other
+        visible allies: Chebyshev range to focus prey, or they reported it.
+        Slot assignment stays id-based.
+        """
+        my_id = obs["agent_id"]
+        candidate_ids = []
+        for peer_id, ally_x, ally_y in peers:
+            if peer_id == chaser_id:
+                continue
+            if peer_id == my_id:
+                if self._knows_prey_at(obs, focus_prey):
+                    candidate_ids.append(peer_id)
+            elif self._peer_can_see_focus_prey(
+                obs, peer_id, ally_x, ally_y, focus_prey,
+            ):
+                candidate_ids.append(peer_id)
+        return sorted(candidate_ids)
+
+    def _unit_step(self, dx, dy):
+        """Sign per axis for a non-zero direction (Manhattan step)."""
+        step_x = 0 if dx == 0 else (1 if dx > 0 else -1)
+        step_y = 0 if dy == 0 else (1 if dy > 0 else -1)
+        return step_x, step_y
+
+    def _flank_options(self, chaser_pos, focus_prey):
+        """Two cells one step perpendicular to the chaser→prey axis."""
+        chaser_x, chaser_y = chaser_pos
+        focus_x, focus_y = focus_prey
+        dx = focus_x - chaser_x
+        dy = focus_y - chaser_y
+        if dx == 0 and dy == 0:
+            return (focus_x + 1, focus_y), (focus_x - 1, focus_y)
+        perp_x, perp_y = self._unit_step(-dy, dx)
+        return (
+            (focus_x + perp_x, focus_y + perp_y),
+            (focus_x - perp_x, focus_y - perp_y),
+        )
+
+    def _my_flank_target(self, obs, peers, chaser_id, focus_prey):
+        chaser_pos = next(
+            (x, y) for peer_id, x, y in peers if peer_id == chaser_id
+        )
+        option1, option2 = self._flank_options(chaser_pos, focus_prey)
+        flanker_ids = self._flanker_candidate_ids(
+            obs, peers, chaser_id, focus_prey,
+        )
+        if obs["agent_id"] not in flanker_ids:
+            return None
+
+        used_slots = []
+        assignments = {}
+        for flanker_id in flanker_ids:
+            flanker_pos = next(
+                (x, y) for peer_id, x, y in peers if peer_id == flanker_id
+            )
+            distance1 = manhattan(
+                flanker_pos[0], flanker_pos[1], option1[0], option1[1],
+            )
+            distance2 = manhattan(
+                flanker_pos[0], flanker_pos[1], option2[0], option2[1],
+            )
+            if option1 not in used_slots and option2 not in used_slots:
+                chosen = option1 if distance1 <= distance2 else option2
+            elif option1 in used_slots:
+                chosen = option2
+            elif option2 in used_slots:
+                chosen = option1
+            else:
+                chosen = option1 if distance1 <= distance2 else option2
+            used_slots.append(chosen)
+            assignments[flanker_id] = chosen
+        return assignments.get(obs["agent_id"])
+
     def _pack(self, obs, last_seen_enemy, legal):
         """Level 4: local pack reasoning — no simulation-assigned targets.
 
@@ -317,8 +400,9 @@ class DecisionMaking:
             return self._chase(obs, last_seen_enemy, legal)
 
         agent_x, agent_y = obs["agent_x"], obs["agent_y"]
-        peer_positions = self._pack_peer_positions(obs)
-        cohesion_allies = visible_allies + shared_allies
+        peer_positions = self._known_peer_positions(
+            obs, include_shared_allies=True,
+        )
 
         prey_candidates = self._pack_prey_candidates(obs)
         target = self._pick_pack_prey(peer_positions, prey_candidates)
@@ -328,39 +412,43 @@ class DecisionMaking:
                 agent_x, agent_y, target_x, target_y, legal,
             ), False
 
-        return self._wander_with_cohesion(
-            agent_x, agent_y, legal, cohesion_allies,
-        ), False
+        return self._chase(obs, last_seen_enemy, legal)
 
-    def _pack_peer_positions(self, obs):
-        """Self plus every known pack ally (direct and relayed)."""
-        agent_x, agent_y = obs["agent_x"], obs["agent_y"]
-        peer_positions = [(agent_x, agent_y)]
+    def _known_peers(self, obs, include_shared_allies=False):
+        """(peer_id, x, y) for self and known allies, sorted by id."""
+        peers = [(obs["agent_id"], obs["agent_x"], obs["agent_y"])]
         seen_ids = {obs["agent_id"]}
-        for source in (
-            obs.get("visible_allies", ()),
-            obs.get("shared_allies", ()),
-        ):
+        sources = [obs.get("visible_allies", ())]
+        if include_shared_allies:
+            sources.append(obs.get("shared_allies", ()))
+        for source in sources:
             for ally_x, ally_y, ally_id in source:
                 if ally_id in seen_ids:
                     continue
                 seen_ids.add(ally_id)
-                peer_positions.append((ally_x, ally_y))
-        return peer_positions
+                peers.append((ally_id, ally_x, ally_y))
+        peers.sort(key=lambda peer: peer[0])
+        return peers
+
+    def _known_peer_positions(self, obs, include_shared_allies=False):
+        return [
+            (x, y) for _, x, y in self._known_peers(
+                obs, include_shared_allies=include_shared_allies,
+            )
+        ]
 
     def _pack_prey_candidates(self, obs):
         """Own direct prey plus prey reported by visible allies via comms."""
         seen_ids = set()
         candidates = []
-        for source in (
+        for enemy_x, enemy_y, enemy_id in _iter_enemy_sightings(
             obs.get("visible_enemies", ()),
             obs.get("shared_enemies", ()),
         ):
-            for enemy_x, enemy_y, enemy_id in source:
-                if enemy_id in seen_ids:
-                    continue
-                seen_ids.add(enemy_id)
-                candidates.append((enemy_x, enemy_y, enemy_id))
+            if enemy_id in seen_ids:
+                continue
+            seen_ids.add(enemy_id)
+            candidates.append((enemy_x, enemy_y, enemy_id))
         candidates.sort(key=lambda t: (t[2], t[0], t[1]))
         return candidates
 

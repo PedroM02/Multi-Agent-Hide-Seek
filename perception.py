@@ -18,7 +18,15 @@ class Perception:
         """
         if visible_enemies:
             return visible_enemies
-        return shared_enemies
+        positions = []
+        
+        for item in shared_enemies:
+            if len(item) == 4:
+                sender_id, enemy_x, enemy_y, enemy_id = item
+            else:
+                enemy_x, enemy_y, enemy_id = item
+            positions.append((enemy_x, enemy_y, enemy_id))
+        return tuple(positions)
 
     def update_last_seen_enemy(
         self,

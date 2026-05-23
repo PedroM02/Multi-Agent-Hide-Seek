@@ -1,5 +1,3 @@
-import random
-
 import agent_utils as au
 from environment import Environment
 
@@ -75,6 +73,7 @@ def resolve_actions(env, intentions, rng):
         }
 
         # First pass: same-team agents cannot claim the same destination.
+        # Ties go to the lowest agent id (deterministic convention).
         by_cell = {}
         for agent_id in team_move_ids:
             by_cell.setdefault(targets[agent_id], []).append(agent_id)
@@ -85,7 +84,7 @@ def resolve_actions(env, intentions, rng):
             if len(claimants) == 1:
                 candidate_target[claimants[0]] = cell
                 continue
-            winner = rng.choice(claimants)
+            winner = min(claimants)
             candidate_target[winner] = cell
             for agent_id in claimants:
                 if agent_id != winner:
