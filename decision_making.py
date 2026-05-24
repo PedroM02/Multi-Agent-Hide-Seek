@@ -227,15 +227,14 @@ class DecisionMaking:
         return self._derive_predator_role(obs)
 
     def _derive_predator_role(self, obs):
+        prey_candidates = self._pack_prey_candidates(obs)
+        if self.searcher_enabled and not prey_candidates:
+            return au.ROLE_SEARCHER, None
+
         if not obs.get("visible_allies", ()):
             return au.ROLE_CHASER, None
 
         peers = self._known_peers(obs, include_shared_allies=False)
-        prey_candidates = self._pack_prey_candidates(obs)
-        if not prey_candidates:
-            if self.searcher_enabled:
-                return au.ROLE_SEARCHER, self._ally_centroid(obs)
-            return au.ROLE_CHASER, None
 
         peer_positions = [(x, y) for _, x, y in peers]
         focus_prey = self._pick_pack_prey(peer_positions, prey_candidates)
@@ -492,46 +491,86 @@ class DecisionMaking:
 
         return self._navigate_to(agent_x, agent_y, target_x, target_y, legal), False
 
-    def _ally_centroid(self, obs):
-        """Centroid of visible allies (own sight only)."""
-        visible_allies = obs.get("visible_allies", ())
-        if not visible_allies:
-            return None
-        centroid_x = sum(ally_x for ally_x, _, _ in visible_allies) // len(
-            visible_allies,
-        )
-        centroid_y = sum(ally_y for _, ally_y, _ in visible_allies) // len(
-            visible_allies,
-        )
-        return centroid_x, centroid_y
+    def init_search_heading(self, obs):
+        """Pick a cardinal direction to persist while searching.
 
-    def _search(self, obs, legal):
-        """SEARCHER: spread apart from visible allies to cover more area.
-
-        When allies are visible, move away from their centroid so
-        predators naturally partition the map without explicit zones.
-        When isolated (no centroid), pick a random cardinal to keep
-        exploring rather than standing still.
+        Uses the sum of vectors away from each visible ally. With no
+        allies, picks a deterministic cardinal from agent id.
         """
         agent_x, agent_y = obs["agent_x"], obs["agent_y"]
-        ally_centroid = obs.get("role_target")
+        visible_allies = obs.get("visible_allies", ())
+        if visible_allies:
+            repel_x = 0
+            repel_y = 0
+            for ally_x, ally_y, _ in visible_allies:
+                repel_x += agent_x - ally_x
+                repel_y += agent_y - ally_y
+            if repel_x == 0 and repel_y == 0:
+                repel_x = 1 if obs["agent_id"] % 2 == 0 else -1
+                repel_y = 1 if obs["agent_id"] % 3 == 0 else -1
+            return self._heading_from_vector(
+                repel_x, repel_y, obs["agent_id"],
+            )
+        cardinals = (au.UP, au.DOWN, au.LEFT, au.RIGHT)
+        return cardinals[obs["agent_id"] % len(cardinals)]
 
-        if ally_centroid is not None:
-            centroid_x, centroid_y = ally_centroid
+    def _heading_from_vector(self, vector_x, vector_y, agent_id):
+        """Map a repulsion vector to the best-matching cardinal action."""
+        candidates = []
+        for action in (au.UP, au.DOWN, au.LEFT, au.RIGHT):
+            delta_x, delta_y = au.ACTION_DELTA[action]
+            if delta_x == 0 and delta_y == 0:
+                continue
+            alignment = delta_x * vector_x + delta_y * vector_y
+            if alignment <= 0:
+                continue
+            candidates.append((alignment, action))
+        if not candidates:
+            cardinals = (au.UP, au.DOWN, au.LEFT, au.RIGHT)
+            return cardinals[agent_id % len(cardinals)]
+        candidates.sort(key=lambda item: (-item[0], item[1]))
+        best_alignment = candidates[0][0]
+        tied = [
+            action for alignment, action in candidates
+            if alignment == best_alignment
+        ]
+        return min(tied)
 
-            def repel_score(action):
-                neighbor_x, neighbor_y = _apply_action(
-                    agent_x, agent_y, action,
-                )
-                distance = abs(neighbor_x - centroid_x) + abs(
-                    neighbor_y - centroid_y,
-                )
-                return (-distance, self.rng.randint(0, 1000))
+    def _search(self, obs, legal):
+        """SEARCHER: keep moving along a persisted heading.
 
-            return min(legal, key=repel_score)
+        The heading is chosen when entering search, when a new visible
+        ally appears, or after prey is lost (re-entering search). It is
+        then reused until the next such event or prey is known.
+        """
+        heading = obs.get("search_heading")
+        if heading is None:
+            cardinals = [action for action in legal if action != au.STAY]
+            return self.rng.choice(cardinals) if cardinals else au.STAY
 
-        cardinals = [action for action in legal if action != au.STAY]
-        return self.rng.choice(cardinals) if cardinals else au.STAY
+        if heading in legal:
+            return heading
+
+        return self._best_aligned_action(legal, heading)
+
+    def _best_aligned_action(self, legal, heading):
+        heading_delta = au.ACTION_DELTA[heading]
+        best = None
+        best_score = None
+        for action in legal:
+            if action == au.STAY:
+                continue
+            delta_x, delta_y = au.ACTION_DELTA[action]
+            score = (
+                delta_x * heading_delta[0] + delta_y * heading_delta[1],
+                self.rng.randint(0, 1000),
+            )
+            if best_score is None or score > best_score:
+                best_score = score
+                best = action
+        if best is not None:
+            return best
+        return au.STAY if au.STAY in legal else self.rng.choice(legal)
 
     def _flee(self, obs, last_seen_enemy, legal):
         active = obs["active_enemies"]

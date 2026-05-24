@@ -44,7 +44,7 @@ ROLE_SEARCHER = "searcher"
 
 ROLE_LETTER = {
     ROLE_CHASER: "C",
-    ROLE_FLEE: "F",
-    ROLE_FLANKER: "K",
+    ROLE_FLEE: "-",
+    ROLE_FLANKER: "F",
     ROLE_SEARCHER: "S",
 }

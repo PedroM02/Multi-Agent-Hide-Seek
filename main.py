@@ -47,10 +47,11 @@ def main():
         "--searcher",
         action="store_true",
         help=(
-            "Enable the ROLE_SEARCHER behaviour in `--mode roles`. When "
-            "predators have visible allies but no known prey (direct sight "
-            "or comms), they spread away from the ally centroid instead of "
-            "falling back to `_chase`. Requires `--mode roles`."
+            "Enable ROLE_SEARCHER in `--mode roles`. Predators stay "
+            "searchers until prey is directly seen or reported via comms, "
+            "using a persisted heading (repel visible allies when (re)setting, "
+            "then keep going). Re-heads when a new ally enters vision. "
+            "Requires `--mode roles`."
         ),
     )
     parser.add_argument(

@@ -346,14 +346,17 @@ color only — no `C`/`F`/`K` letters outside `--mode roles`.
 In `--mode roles`, each agent calls [`DecisionMaking.derive_role`](decision_making.py)
 before choosing an action. Predators with visible allies coordinate via
 local rules (see Level 4 above); prey are labelled `ROLE_FLEE` for the GUI.
-With `--searcher`, predators that see allies but no known prey become
-`ROLE_SEARCHER` and spread away from the visible-ally centroid.
+With `--searcher`, predators stay `ROLE_SEARCHER` until prey is reported
+via direct sight or comms (memory alone does not end search). A search
+heading is chosen when entering search and again whenever a **new** ally
+enters vision; it is kept until the next such event or prey is known.
+Repulsion uses only visible allies from the agent's own observation.
 
 | Role | Team | Per-step behaviour |
 |------|------|--------------------|
 | `ROLE_CHASER` | predator | Chase `role_target` or `_chase` fallback |
 | `ROLE_FLANKER` | predator | Navigate to perpendicular flank cell; STAY when reached |
-| `ROLE_SEARCHER` | predator | Move away from visible-ally centroid when no prey is known; random explore if isolated |
+| `ROLE_SEARCHER` | predator | Persisted heading; re-picked on search entry or when a new ally enters vision |
 | `ROLE_FLEE` | prey | Flee scoring below |
 
 Levels 2–3 use `_chase` / `_flee` directly without role derivation.
@@ -521,7 +524,7 @@ All flags are kebab-case; full list available via `python main.py --help`.
 | `--wall-size N` | 2 | Length of each generated wall segment |
 | `--mode {random,chase,roles,pack,optimal}` | `chase` | Predator decision mode (see "Predator behavior levels") |
 | `--comms {prey,predators,both}` | off | Enable speaker-centric, single-hop intra-team communication for the given team(s); omit for none |
-| `--searcher` | off | In `--mode roles`, enable `ROLE_SEARCHER` when allies are visible but no prey is known |
+| `--searcher` | off | In `--mode roles`, keep predators in `ROLE_SEARCHER` until prey is seen or comms-reported; persisted explore heading |
 | `--prey-defend {stun,kill}` | off | Enable the cooperative-knockout mechanic. Groups of Cheb-1 prey defeat up to `n-1` sandwiched predators per step (sandwicher prey are forced to STAY that step). `stun` freezes the predator for 3 steps; `kill` removes it from the run and ends the episode early once every predator is gone. See "Prey-defend (cooperative knockout)" above. |
 
 Determinism: a given `(seed, run index, all other flags)` reproduces

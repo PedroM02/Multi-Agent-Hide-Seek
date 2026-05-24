@@ -14,12 +14,18 @@ class Agent:
         self.decision = decision
         self.rng = rng
         self.last_seen_enemy = None
+        # Persisted cardinal direction while ROLE_SEARCHER (`--searcher`).
+        self.search_heading = None
+        # Ally ids visible last step while searching (re-head on new entries).
+        self.search_seen_ally_ids = set()
         # Written each step by derive_role in `--mode roles` (for GUI).
         self.role = None
         self.role_target = None
 
     def reset_memory(self):
         self.last_seen_enemy = None
+        self.search_heading = None
+        self.search_seen_ally_ids = set()
         self.role = None
         self.role_target = None
 
@@ -56,10 +62,30 @@ class Agent:
 
         obs_for_decision = obs
         if self.decision.mode == au.MODE_ROLES:
+            prev_role = self.role
             self.role, self.role_target = self.decision.derive_role(obs)
+            if self.decision.searcher_enabled:
+                if self.role == au.ROLE_SEARCHER:
+                    visible_ally_ids = {
+                        ally_id
+                        for _, _, ally_id in obs.get("visible_allies", ())
+                    }
+                    if prev_role != au.ROLE_SEARCHER:
+                        self.search_heading = (
+                            self.decision.init_search_heading(obs)
+                        )
+                    elif visible_ally_ids - self.search_seen_ally_ids:
+                        self.search_heading = (
+                            self.decision.init_search_heading(obs)
+                        )
+                    self.search_seen_ally_ids = visible_ally_ids
+                else:
+                    self.search_heading = None
+                    self.search_seen_ally_ids = set()
             obs_for_decision = dict(obs)
             obs_for_decision["role"] = self.role
             obs_for_decision["role_target"] = self.role_target
+            obs_for_decision["search_heading"] = self.search_heading
         else:
             self.role = None
             self.role_target = None
