@@ -243,6 +243,9 @@ class SimulationConfig:
         self.stun_duration = 3
         # Predator decision mode — see agent_utils.MODE_*.
         self.mode = au.MODE_CHASE
+        # In `--mode roles`, assign ROLE_SEARCHER when allies are visible
+        # but no prey is known. Off by default; enable with --searcher.
+        self.roles_searcher = False
 
 
 def copy_config(base, **overrides):
@@ -262,6 +265,7 @@ def copy_config(base, **overrides):
     new_config.prey_defend = base.prey_defend
     new_config.stun_duration = base.stun_duration
     new_config.mode = base.mode
+    new_config.roles_searcher = base.roles_searcher
     for key, value in overrides.items():
         setattr(new_config, key, value)
     return new_config

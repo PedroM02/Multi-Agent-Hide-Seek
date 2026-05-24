@@ -220,7 +220,7 @@ Prey behavior is unchanged across levels (flee, optional stun/kill).
 | 1 | `random` | off | none | Uniform random over `legal_actions` each step |
 | 2 | `chase` | off | none | Greedy Manhattan pursuit (`DecisionMaking._chase`) |
 | 3 | `chase` | `predators` / `both` | none | Same chase as Level 2; teammate enemy reports augment perception |
-| 4 | `roles` | optional | enabled | Per-agent chaser/flanker derivation (`derive_role`); single-hop comms |
+| 4 | `roles` | optional | enabled | Per-agent chaser/flanker/searcher derivation (`derive_role`); single-hop comms |
 | 5 | `pack` | `predators` / `both` **required** | none | Per-agent pack reasoning: visible allies + comms prey reports; min sum Manhattan; `_chase` fallback when no prey known |
 | 6 | `optimal` | off | none | Clairvoyant BFS; all predators share one focus prey until captured |
 
@@ -346,11 +346,14 @@ color only — no `C`/`F`/`K` letters outside `--mode roles`.
 In `--mode roles`, each agent calls [`DecisionMaking.derive_role`](decision_making.py)
 before choosing an action. Predators with visible allies coordinate via
 local rules (see Level 4 above); prey are labelled `ROLE_FLEE` for the GUI.
+With `--searcher`, predators that see allies but no known prey become
+`ROLE_SEARCHER` and spread away from the visible-ally centroid.
 
 | Role | Team | Per-step behaviour |
 |------|------|--------------------|
 | `ROLE_CHASER` | predator | Chase `role_target` or `_chase` fallback |
 | `ROLE_FLANKER` | predator | Navigate to perpendicular flank cell; STAY when reached |
+| `ROLE_SEARCHER` | predator | Move away from visible-ally centroid when no prey is known; random explore if isolated |
 | `ROLE_FLEE` | prey | Flee scoring below |
 
 Levels 2–3 use `_chase` / `_flee` directly without role derivation.
@@ -469,7 +472,7 @@ identical to the prior behaviour.
 | Dimmed (~50%) purple rounded rect | Stunned predator (only seen with `--prey-defend stun`; cannot move or capture for `stun_duration` steps) |
 | (no rendering) | Killed predator (only with `--prey-defend kill`); the body is dropped from rendering the same way captured prey are |
 | Green rounded rect | Prey body |
-| Single white letter inside a body | Current role (`C` chaser, `F` flee) — also dimmed when the body is stunned |
+| Single white letter inside a body | Current role (`C` chaser, `K` flanker, `S` searcher, `F` flee) — also dimmed when the body is stunned |
 | Dark grey filled cell | Wall |
 
 Controls: `space` / `right` step once, `a` toggles auto-run, `r` resets
@@ -518,6 +521,7 @@ All flags are kebab-case; full list available via `python main.py --help`.
 | `--wall-size N` | 2 | Length of each generated wall segment |
 | `--mode {random,chase,roles,pack,optimal}` | `chase` | Predator decision mode (see "Predator behavior levels") |
 | `--comms {prey,predators,both}` | off | Enable speaker-centric, single-hop intra-team communication for the given team(s); omit for none |
+| `--searcher` | off | In `--mode roles`, enable `ROLE_SEARCHER` when allies are visible but no prey is known |
 | `--prey-defend {stun,kill}` | off | Enable the cooperative-knockout mechanic. Groups of Cheb-1 prey defeat up to `n-1` sandwiched predators per step (sandwicher prey are forced to STAY that step). `stun` freezes the predator for 3 steps; `kill` removes it from the run and ends the episode early once every predator is gone. See "Prey-defend (cooperative knockout)" above. |
 
 Determinism: a given `(seed, run index, all other flags)` reproduces

@@ -44,6 +44,16 @@ def main():
         ),
     )
     parser.add_argument(
+        "--searcher",
+        action="store_true",
+        help=(
+            "Enable the ROLE_SEARCHER behaviour in `--mode roles`. When "
+            "predators have visible allies but no known prey (direct sight "
+            "or comms), they spread away from the ally centroid instead of "
+            "falling back to `_chase`. Requires `--mode roles`."
+        ),
+    )
+    parser.add_argument(
         "--prey-defend",
         choices=["stun", "kill"],
         default=None,
@@ -74,9 +84,13 @@ def main():
     config.mode = args.mode
     config.comms = args.comms
     config.prey_defend = args.prey_defend
+    config.roles_searcher = args.searcher
 
     if config.mode == "pack" and config.comms not in ("predators", "both"):
         parser.error("--mode pack requires --comms predators or --comms both")
+
+    if config.roles_searcher and config.mode != "roles":
+        parser.error("--searcher requires --mode roles")
 
     if args.gui:
         from visualization import run_visualization

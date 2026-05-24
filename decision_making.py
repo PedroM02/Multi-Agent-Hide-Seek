@@ -150,9 +150,10 @@ def select_pack_prey_id(
 
 
 class DecisionMaking:
-    def __init__(self, rng, mode=au.MODE_CHASE):
+    def __init__(self, rng, mode=au.MODE_CHASE, searcher_enabled=False):
         self.rng = rng
         self.mode = mode
+        self.searcher_enabled = searcher_enabled
 
     def choose_action(self, obs, last_seen_enemy):
         """Return (chosen_action, should_clear_memory).
@@ -232,6 +233,8 @@ class DecisionMaking:
         peers = self._known_peers(obs, include_shared_allies=False)
         prey_candidates = self._pack_prey_candidates(obs)
         if not prey_candidates:
+            if self.searcher_enabled:
+                return au.ROLE_SEARCHER, self._ally_centroid(obs)
             return au.ROLE_CHASER, None
 
         peer_positions = [(x, y) for _, x, y in peers]
@@ -259,6 +262,8 @@ class DecisionMaking:
 
         if role == au.ROLE_FLANKER:
             return self._flank(obs, legal)
+        if role == au.ROLE_SEARCHER:
+            return self._search(obs, legal), False
         if role == au.ROLE_CHASER and role_target is not None:
             target_x, target_y = role_target
             return self._navigate_to(
@@ -486,6 +491,47 @@ class DecisionMaking:
             return au.STAY, False
 
         return self._navigate_to(agent_x, agent_y, target_x, target_y, legal), False
+
+    def _ally_centroid(self, obs):
+        """Centroid of visible allies (own sight only)."""
+        visible_allies = obs.get("visible_allies", ())
+        if not visible_allies:
+            return None
+        centroid_x = sum(ally_x for ally_x, _, _ in visible_allies) // len(
+            visible_allies,
+        )
+        centroid_y = sum(ally_y for _, ally_y, _ in visible_allies) // len(
+            visible_allies,
+        )
+        return centroid_x, centroid_y
+
+    def _search(self, obs, legal):
+        """SEARCHER: spread apart from visible allies to cover more area.
+
+        When allies are visible, move away from their centroid so
+        predators naturally partition the map without explicit zones.
+        When isolated (no centroid), pick a random cardinal to keep
+        exploring rather than standing still.
+        """
+        agent_x, agent_y = obs["agent_x"], obs["agent_y"]
+        ally_centroid = obs.get("role_target")
+
+        if ally_centroid is not None:
+            centroid_x, centroid_y = ally_centroid
+
+            def repel_score(action):
+                neighbor_x, neighbor_y = _apply_action(
+                    agent_x, agent_y, action,
+                )
+                distance = abs(neighbor_x - centroid_x) + abs(
+                    neighbor_y - centroid_y,
+                )
+                return (-distance, self.rng.randint(0, 1000))
+
+            return min(legal, key=repel_score)
+
+        cardinals = [action for action in legal if action != au.STAY]
+        return self.rng.choice(cardinals) if cardinals else au.STAY
 
     def _flee(self, obs, last_seen_enemy, legal):
         active = obs["active_enemies"]

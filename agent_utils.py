@@ -40,9 +40,11 @@ MODE_PACK = "pack"
 ROLE_CHASER = "chaser"
 ROLE_FLEE = "flee"
 ROLE_FLANKER = "flanker"
+ROLE_SEARCHER = "searcher"
 
 ROLE_LETTER = {
     ROLE_CHASER: "C",
     ROLE_FLEE: "F",
     ROLE_FLANKER: "K",
+    ROLE_SEARCHER: "S",
 }

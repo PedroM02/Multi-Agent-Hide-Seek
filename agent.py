@@ -90,7 +90,13 @@ def build_agents_for_env(env, rng, config):
                 team=body.team,
                 perception=Perception(),
                 decision=DecisionMaking(
-                    random.Random(decision_seed), mode=decision_mode,
+                    random.Random(decision_seed),
+                    mode=decision_mode,
+                    searcher_enabled=(
+                        config.roles_searcher
+                        if body.team == au.TEAM_PREDATOR
+                        else False
+                    ),
                 ),
                 rng=random.Random(perception_seed),
             )
