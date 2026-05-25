@@ -438,7 +438,9 @@ class SimulationState:
                 and predator_actions is not None
             ):
                 intentions[agent.agent_id] = predator_actions[agent.agent_id]
-                agents_by_id[agent.agent_id].update_memory_from_obs(obs)
+                predator_agent = agents_by_id[agent.agent_id]
+                predator_agent.update_memory_from_obs(obs)
+                predator_agent.clear_stale_memory_if_at_cell(obs)
             else:
                 intentions[agent.agent_id] = agent.decide(obs)
 
@@ -473,6 +475,15 @@ class SimulationState:
         resolve_actions(self.env, intentions)
         captured = self.env.apply_captures()
         self.last_captured = captured
+        if captured and predator_actions is not None:
+            capture_positions = {
+                (self.env.agent_bodies[prey_id].x, self.env.agent_bodies[prey_id].y)
+                for prey_id in captured
+            }
+            for agent in self.agents:
+                body = self.env.agent_bodies[agent.agent_id]
+                if body.team == au.TEAM_PREDATOR and body.alive:
+                    agent.clear_memory_at_positions(capture_positions)
         rewards = attribute_rewards(self.env, captured)
         for agent_id, reward in rewards.items():
             self.cumulative_rewards[agent_id] = (

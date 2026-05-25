@@ -42,6 +42,20 @@ class Agent:
         if visible_position is not None:
             self.last_seen_enemy = visible_position
 
+    def clear_stale_memory_if_at_cell(self, obs):
+        """Drop memory when standing on a stale last-seen cell with no prey known."""
+        if obs.get("active_enemies", ()):
+            return
+        last_seen = self.last_seen_enemy
+        if last_seen is None:
+            return
+        if (obs["agent_x"], obs["agent_y"]) == last_seen:
+            self.last_seen_enemy = None
+
+    def clear_memory_at_positions(self, positions):
+        if self.last_seen_enemy is not None and self.last_seen_enemy in positions:
+            self.last_seen_enemy = None
+
     def prepare_observation(self, obs, shared_enemies, shared_allies=()):
         """Fuse the raw observation with teammate reports.
 

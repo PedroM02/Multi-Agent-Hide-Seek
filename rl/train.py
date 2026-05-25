@@ -8,7 +8,7 @@ from pathlib import Path
 import torch
 
 import agent_utils as au
-from reward_attribution import predator_team_reward
+from reward_attribution import predator_team_shaped_reward
 from rl.checkpointing import load_checkpoint, save_checkpoint
 from rl.eval_runner import curriculum_phase_for_update, evaluate_policy, sample_num_prey
 from rl.inference import collect_predator_transitions, make_rl_config
@@ -41,9 +41,17 @@ def collect_rollout(training_rng, policy, device, ppo_cfg, base_config, update, 
         sim = SimulationState(config, random.Random(episode_seed))
         episode_reward = 0.0
         episode_steps = 0
+        visited_cells = {
+            (
+                sim.env.agent_bodies[agent_id].x,
+                sim.env.agent_bodies[agent_id].y,
+            )
+            for agent_id in sim.predator_agent_ids()
+        }
 
         while sim.outcome == au.OUTCOME_ONGOING and len(buffer) < ppo_cfg.rollout_steps:
             raw_obs = sim.build_step_observations()
+            visited_before = set(visited_cells)
             predator_actions, transitions = collect_predator_transitions(
                 sim, policy, device, raw_obs, deterministic=False,
             )
@@ -51,7 +59,15 @@ def collect_rollout(training_rng, policy, device, ppo_cfg, base_config, update, 
                 predator_actions=predator_actions,
                 raw_obs=raw_obs,
             )
-            reward = predator_team_reward(sim.last_captured)
+            for agent_id in sim.predator_agent_ids():
+                body = sim.env.agent_bodies[agent_id]
+                visited_cells.add((body.x, body.y))
+            reward = predator_team_shaped_reward(
+                sim,
+                raw_obs,
+                sim.last_captured,
+                visited_before,
+            )
             done = not continuing
             episode_reward += reward * len(transitions)
             episode_steps += 1
