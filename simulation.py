@@ -301,9 +301,12 @@ class SimulationState:
         self.step_index = 0
         self.outcome = au.OUTCOME_ONGOING
         self.cumulative_rewards = {}
+        self.last_captured = []
         self.reset_episode()
 
-    def reset_episode(self):
+    def reset_episode(self, num_prey=None):
+        if num_prey is not None:
+            self.config.num_prey = num_prey
         self.env.set_agent_positions(
             self.config.num_predators,
             self.config.num_prey,
@@ -318,6 +321,66 @@ class SimulationState:
             agent_id: 0.0 for agent_id in self.env.agent_bodies
         }
         self._pack_focus_prey_id = None
+        self.last_captured = []
+
+    def _vision_radius_for_team(self, team):
+        if team == au.TEAM_PREDATOR:
+            return self.config.vision_radius_predator
+        return self.config.vision_radius_prey
+
+    def build_step_observations(self):
+        """Phases 1–2.5: raw obs, comms, perception fusion, oracle inject."""
+        raw_obs = {}
+        for agent in self.agents:
+            body = self.env.agent_bodies[agent.agent_id]
+            if not body.alive:
+                continue
+            raw_obs[agent.agent_id] = build_observation(
+                self.env,
+                agent.agent_id,
+                self._vision_radius_for_team(body.team),
+            )
+
+        if self.config.comms is not None:
+            if self.config.mode == au.MODE_PACK:
+                shared_enemies, shared_allies = _exchange_pack_messages(
+                    raw_obs, self.config,
+                )
+            else:
+                shared_enemies = _exchange_team_messages(
+                    raw_obs, self.config,
+                )
+                shared_allies = {
+                    agent_id: tuple() for agent_id in raw_obs
+                }
+        else:
+            shared_enemies = {agent_id: tuple() for agent_id in raw_obs}
+            shared_allies = {agent_id: tuple() for agent_id in raw_obs}
+
+        agents_by_id = {agent.agent_id: agent for agent in self.agents}
+        for agent_id, obs in raw_obs.items():
+            if comms_enabled_for_team(self.config, obs["team"]):
+                enemy_reports = shared_enemies[agent_id]
+                ally_reports = shared_allies[agent_id]
+            else:
+                enemy_reports = tuple()
+                ally_reports = tuple()
+            agents_by_id[agent_id].prepare_observation(
+                obs, enemy_reports, ally_reports,
+            )
+
+        self._inject_oracle_obs(raw_obs)
+        return raw_obs
+
+    def predator_agent_ids(self):
+        return [
+            agent.agent_id
+            for agent in self.agents
+            if (
+                self.env.agent_bodies[agent.agent_id].alive
+                and self.env.agent_bodies[agent.agent_id].team == au.TEAM_PREDATOR
+            )
+        ]
 
     def _inject_oracle_obs(self, raw_obs):
         """Level 6: clairvoyant prey positions + optional shared pack target."""
@@ -356,76 +419,28 @@ class SimulationState:
             if pack_target is not None:
                 obs["pack_target"] = pack_target
 
-    def step_once(self):
+    def step_once(self, predator_actions=None, raw_obs=None):
         if self.outcome != au.OUTCOME_ONGOING:
             return False
 
-        # Phase 1: build raw observations for every alive agent.
-        raw_obs = {}
-        for agent in self.agents:
-            body = self.env.agent_bodies[agent.agent_id]
-            if not body.alive:
-                continue
-            radius = (
-                self.config.vision_radius_predator
-                if body.team == au.TEAM_PREDATOR
-                else self.config.vision_radius_prey
-            )
-            raw_obs[agent.agent_id] = build_observation(
-                self.env, agent.agent_id, radius,
-            )
-
-        # Phase 2: synchronous, speaker-centric team comms.
-        # Pack mode uses two passes so a three-predator chain can relay
-        # prey and ally positions; all other modes stay single-hop.
-        if self.config.comms is not None:
-            if self.config.mode == au.MODE_PACK:
-                shared_enemies, shared_allies = _exchange_pack_messages(
-                    raw_obs, self.config,
-                )
-            else:
-                shared_enemies = _exchange_team_messages(
-                    raw_obs, self.config,
-                )
-                shared_allies = {
-                    agent_id: tuple() for agent_id in raw_obs
-                }
-        else:
-            shared_enemies = {agent_id: tuple() for agent_id in raw_obs}
-            shared_allies = {agent_id: tuple() for agent_id in raw_obs}
-
-        # Phase 2b: each agent fuses its direct sightings with the
-        # teammate reports addressed to it, producing the
-        # priority-resolved `active_enemies` set on its own observation.
-        # The fusion lives on the Agent (delegated to its Perception) so
-        # that the simulation only orchestrates — it doesn't decide what
-        # the agent "knows".
+        if raw_obs is None:
+            raw_obs = self.build_step_observations()
         agents_by_id = {agent.agent_id: agent for agent in self.agents}
-        for agent_id, obs in raw_obs.items():
-            if comms_enabled_for_team(self.config, obs["team"]):
-                enemy_reports = shared_enemies[agent_id]
-                ally_reports = shared_allies[agent_id]
-            else:
-                enemy_reports = tuple()
-                ally_reports = tuple()
-            agents_by_id[agent_id].prepare_observation(
-                obs, enemy_reports, ally_reports,
-            )
 
-        # Phase 2.5: oracle fields for Level 6 optimal modes.
-        self._inject_oracle_obs(raw_obs)
-
-        # Phase 3: agents decide using direct sightings, then teammate
-        # reports, then their own memory. Roles are derived locally
-        # inside each agent in `--mode roles`.
         intentions = {}
         for agent in self.agents:
             body = self.env.agent_bodies[agent.agent_id]
             if not body.alive:
                 continue
-            intentions[agent.agent_id] = agent.decide(
-                raw_obs[agent.agent_id],
-            )
+            obs = raw_obs[agent.agent_id]
+            if (
+                body.team == au.TEAM_PREDATOR
+                and predator_actions is not None
+            ):
+                intentions[agent.agent_id] = predator_actions[agent.agent_id]
+                agents_by_id[agent.agent_id].update_memory_from_obs(obs)
+            else:
+                intentions[agent.agent_id] = agent.decide(obs)
 
         # Phase 4: cooperative-knockout system (opt-in via
         # --prey-defend). Up to two passes, both gated on the
@@ -457,6 +472,7 @@ class SimulationState:
 
         resolve_actions(self.env, intentions)
         captured = self.env.apply_captures()
+        self.last_captured = captured
         rewards = attribute_rewards(self.env, captured)
         for agent_id, reward in rewards.items():
             self.cumulative_rewards[agent_id] = (

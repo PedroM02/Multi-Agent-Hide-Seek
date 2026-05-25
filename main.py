@@ -1,6 +1,17 @@
+import argparse
+
 from simulation import SimulationConfig, format_batch_summary, run_batch
 
-import argparse
+
+def _load_rl_policy(checkpoint_path):
+    import torch
+
+    from rl.checkpointing import load_checkpoint
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    policy, _ppo_cfg, _payload = load_checkpoint(checkpoint_path, device)
+    policy.eval()
+    return policy, device
 
 
 def main():
@@ -19,7 +30,7 @@ def main():
     parser.add_argument("--wall-size", type=int, default=2, dest="wall_size", help="Length (in cells) of each randomly generated wall segment.",)
     parser.add_argument(
         "--mode",
-        choices=["random", "chase", "pack", "roles", "optimal"],
+        choices=["random", "chase", "pack", "roles", "optimal", "rl"],
         default="chase",
         help=(
             "Predator decision mode. random: Level 1. chase: Level 2 "
@@ -29,6 +40,12 @@ def main():
             "with chaser/flanker coordination.  optimal: Level 6 clairvoyant BFS with shared "
             "pack focus."
         ),
+    )
+    parser.add_argument(
+        "--checkpoint",
+        type=str,
+        default=None,
+        help="Path to a trained IPPO checkpoint (required for --mode rl).",
     )
     parser.add_argument(
         "--comms",
@@ -93,10 +110,30 @@ def main():
     if config.roles_searcher and config.mode != "roles":
         parser.error("--searcher requires --mode roles")
 
+    rl_policy = None
+    rl_device = None
+    if config.mode == "rl":
+        if args.checkpoint is None:
+            parser.error("--mode rl requires --checkpoint")
+        rl_policy, rl_device = _load_rl_policy(args.checkpoint)
+        if config.comms is None:
+            config.comms = "both"
+
     if args.gui:
         from visualization import run_visualization
 
-        run_visualization(config, args.runs)
+        run_visualization(
+            config, args.runs, rl_policy=rl_policy, rl_device=rl_device,
+        )
+        return
+
+    if config.mode == "rl":
+        from rl.eval_runner import run_rl_batch
+
+        summary = run_rl_batch(
+            config, args.runs, rl_policy, rl_device, deterministic=True,
+        )
+        print(format_batch_summary(summary, config))
         return
 
     summary = run_batch(config, args.runs)

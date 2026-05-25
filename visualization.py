@@ -105,7 +105,7 @@ def _draw_grid(
     surface.blit(hint_2, (PAD_X, 74))
 
 
-def run_visualization(config, num_runs=1):
+def run_visualization(config, num_runs=1, rl_policy=None, rl_device=None):
     pygame.init()
     total_runs = max(1, num_runs)
     run_index = 0
@@ -133,6 +133,20 @@ def run_visualization(config, num_runs=1):
 
     summary = BatchSummary()
     logged_runs = set()
+
+    def simulation_step():
+        if rl_policy is not None:
+            from rl.inference import select_predator_actions
+
+            predator_actions, raw_obs = select_predator_actions(
+                sim, rl_policy, rl_device, deterministic=True,
+            )
+            sim.step_once(
+                predator_actions=predator_actions,
+                raw_obs=raw_obs,
+            )
+        else:
+            sim.step_once()
 
     def log_current_run_if_done():
         """Record the current run into the batch summary once it finishes.
@@ -187,7 +201,7 @@ def run_visualization(config, num_runs=1):
                     running = False
                 elif event.key in (pygame.K_SPACE, pygame.K_RIGHT):
                     if sim.outcome == au.OUTCOME_ONGOING:
-                        sim.step_once()
+                        simulation_step()
                         if sim.outcome != au.OUTCOME_ONGOING:
                             log_current_run_if_done()
                 elif event.key == pygame.K_a:
@@ -204,7 +218,7 @@ def run_visualization(config, num_runs=1):
                             pygame.time.set_timer(pygame.USEREVENT, 0)
             elif event.type == pygame.USEREVENT and auto:
                 if sim.outcome == au.OUTCOME_ONGOING:
-                    sim.step_once()
+                    simulation_step()
                     if sim.outcome != au.OUTCOME_ONGOING:
                         log_current_run_if_done()
                 elif not try_advance_run():

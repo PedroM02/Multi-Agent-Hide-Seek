@@ -167,6 +167,8 @@ class DecisionMaking:
             return au.STAY, False
 
         if obs["team"] == au.TEAM_PREDATOR:
+            if self.mode == au.MODE_RL:
+                return au.STAY, False
             if self.mode == au.MODE_RANDOM:
                 return self._random_move(legal), False
             if self.mode == au.MODE_OPTIMAL:

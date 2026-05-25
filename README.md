@@ -23,7 +23,53 @@ python main.py --runs 5 --seed 0  # five seeded runs, text summary
 python main.py --help             # full CLI reference
 ```
 
-Python 3.10+, `pygame` for the GUI only.
+Python 3.10+, `pygame` for the GUI, `torch` and `numpy` for RL training.
+
+---
+
+## Reinforcement learning (shared-policy IPPO)
+
+Predators can be trained with shared-policy IPPO while prey keep the
+existing `_flee` / wander heuristics. Training uses `--comms both`
+(single-hop), default walls (`--walls 2 --wall-size 2`), 3 predators,
+and randomizes prey count in `{2, 3, 4}` each episode.
+
+```bash
+pip install -r requirements.txt
+
+# Train (headless)
+python -m rl.train --updates 1000 --predators 3 --eval-every 25 --seed 0
+
+# Evaluate a checkpoint (all prey counts)
+python -m rl.evaluate --checkpoint checkpoints/ippo/best_eval.pt --runs 50 --seed 0
+
+# Batch inference for one prey count
+python main.py --mode rl --checkpoint checkpoints/ippo/best_eval.pt \
+  --predators 3 --prey 3 --comms both --walls 2 --wall-size 2 --runs 50 --seed 0
+
+# GUI replay
+python main.py --mode rl --gui --checkpoint checkpoints/ippo/best_eval.pt \
+  --predators 3 --prey 3 --comms both --seed 0
+```
+
+Compare against `--mode roles --comms both` (with and without
+`--searcher`) using the same `--seed` and `--runs`. Checkpoints and
+CSV logs are written under `checkpoints/ippo/` (`train_log.csv`,
+`eval_log.csv`, `latest.pt`, `best_eval.pt`).
+
+Use `--curriculum` on `rl.train` if learning stalls: prey=2 only for
+the first 200 updates, then `{2,3}`, then `{2,3,4}`.
+
+To reduce brittle late-training policies, defaults now use a higher
+entropy bonus (`--entropy-coef 0.02`) and an entropy floor
+(`--entropy-floor 0.4`). Fine-tune from a strong checkpoint instead of
+training blindly past the eval peak:
+
+```bash
+python -m rl.train --checkpoint checkpoints/ippo/best_eval.pt \
+  --updates 900 --predators 3 --eval-every 25 --seed 0 \
+  --checkpoint-dir checkpoints/ippo_entropy
+```
 
 ---
 

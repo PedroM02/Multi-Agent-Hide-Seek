@@ -29,6 +29,19 @@ class Agent:
         self.role = None
         self.role_target = None
 
+    def update_memory_from_obs(self, obs):
+        """Refresh `last_seen_enemy` from fused `active_enemies`."""
+        if self.decision.mode == au.MODE_OPTIMAL:
+            return
+        active = obs.get("active_enemies", ())
+        if not active:
+            return
+        visible_position = self.perception.update_last_seen_enemy(
+            obs["agent_x"], obs["agent_y"], active, self.rng,
+        )
+        if visible_position is not None:
+            self.last_seen_enemy = visible_position
+
     def prepare_observation(self, obs, shared_enemies, shared_allies=()):
         """Fuse the raw observation with teammate reports.
 
@@ -46,19 +59,7 @@ class Agent:
         assert obs["agent_id"] == self.agent_id
         assert obs["team"] == self.team
 
-        # `active_enemies` was populated by this agent's own
-        # prepare_observation earlier in the step (strict priority:
-        # direct sight > teammate report > empty). When non-empty, refresh
-        # memory from it so the fallback memory is never older than the
-        # freshest signal the team produced.
-        if self.decision.mode != au.MODE_OPTIMAL:
-            active = obs["active_enemies"]
-            if active:
-                visible_position = self.perception.update_last_seen_enemy(
-                    obs["agent_x"], obs["agent_y"], active, self.rng,
-                )
-                if visible_position is not None:
-                    self.last_seen_enemy = visible_position
+        self.update_memory_from_obs(obs)
 
         obs_for_decision = obs
         if self.decision.mode == au.MODE_ROLES:
