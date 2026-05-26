@@ -18,6 +18,13 @@ def build_arg_parser():
     parser.add_argument("--wall-size", type=int, default=2)
     parser.add_argument("--runs", type=int, default=50)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument(
+        "--prey-defend",
+        choices=["stun", "kill"],
+        default=None,
+        dest="prey_defend",
+        help="Enable cooperative prey knockout (stun or kill). Omit to disable.",
+    )
     return parser
 
 
@@ -37,6 +44,7 @@ def main():
         prey_counts=prey_counts,
         walls=args.num_walls,
         wall_size=args.wall_size,
+        prey_defend=args.prey_defend,
     )
 
     print(f"mean_win_rate={mean_win_rate:.3f}", flush=True)

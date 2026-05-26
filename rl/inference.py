@@ -4,11 +4,26 @@ import numpy as np
 import torch
 
 import agent_utils as au
-from rl.obs_encoding import IDX_TO_ACTION, action_mask, encode_obs
+from rl.obs_encoding import ACTION_TO_IDX, IDX_TO_ACTION, action_mask, encode_obs
 
 
 def agents_by_id(sim):
     return {agent.agent_id: agent for agent in sim.agents}
+
+
+def predator_action_mask(sim, agent_id, raw_obs):
+    """Legal actions for a predator; stunned predators may only STAY."""
+    mask = action_mask(raw_obs)
+    body = sim.env.agent_bodies[agent_id]
+    if (
+        sim.config.prey_defend == "stun"
+        and body.team == au.TEAM_PREDATOR
+        and body.stun_remaining > 0
+    ):
+        stay_only = np.zeros_like(mask)
+        stay_only[ACTION_TO_IDX[au.STAY]] = True
+        return stay_only
+    return mask
 
 
 def collect_predator_transitions(sim, policy, device, raw_obs, deterministic=False):
@@ -21,7 +36,7 @@ def collect_predator_transitions(sim, policy, device, raw_obs, deterministic=Fal
         raw = raw_obs[agent_id]
         agent = agent_lookup[agent_id]
         obs_vec = encode_obs(raw, agent)
-        mask_vec = action_mask(raw)
+        mask_vec = predator_action_mask(sim, agent_id, raw)
         obs = torch.tensor(obs_vec, dtype=torch.float32, device=device).unsqueeze(0)
         mask = torch.tensor(mask_vec, dtype=torch.bool, device=device).unsqueeze(0)
 
@@ -59,7 +74,6 @@ def make_rl_config(base=None, **overrides):
     config = SimulationConfig() if base is None else base
     config.mode = au.MODE_RL
     config.comms = "both"
-    config.prey_defend = None
     for key, value in overrides.items():
         setattr(config, key, value)
     return config

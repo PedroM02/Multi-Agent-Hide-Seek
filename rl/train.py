@@ -36,6 +36,7 @@ def collect_rollout(training_rng, policy, device, ppo_cfg, base_config, update, 
             num_prey=num_prey,
             num_walls=base_config.num_walls,
             wall_size=base_config.wall_size,
+            prey_defend=base_config.prey_defend,
             seed=episode_seed,
         )
         sim = SimulationState(config, random.Random(episode_seed))
@@ -119,6 +120,7 @@ def train(args):
         num_predators=args.predators,
         num_walls=args.num_walls,
         wall_size=args.wall_size,
+        prey_defend=args.prey_defend,
     )
 
     policy = ActorCritic().to(device)
@@ -202,6 +204,7 @@ def train(args):
                 num_predators=args.predators,
                 walls=args.num_walls,
                 wall_size=args.wall_size,
+                prey_defend=args.prey_defend,
             )
             append_csv_row(
                 checkpoint_dir / "eval_log.csv",
@@ -279,6 +282,13 @@ def build_arg_parser():
         "--curriculum",
         action="store_true",
         help="Train prey=2 first, then mix 2+3, then 2+3+4.",
+    )
+    parser.add_argument(
+        "--prey-defend",
+        choices=["stun", "kill"],
+        default=None,
+        dest="prey_defend",
+        help="Enable cooperative prey knockout (stun or kill). Omit to disable.",
     )
     return parser
 

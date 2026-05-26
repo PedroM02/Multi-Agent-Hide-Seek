@@ -69,6 +69,7 @@ def evaluate_policy(
     prey_counts=(2, 3, 4),
     walls=2,
     wall_size=2,
+    prey_defend=None,
 ):
     results = {}
     for num_prey in prey_counts:
@@ -77,6 +78,7 @@ def evaluate_policy(
             num_prey=num_prey,
             num_walls=walls,
             wall_size=wall_size,
+            prey_defend=prey_defend,
             seed=seed,
         )
         summary = run_rl_batch(
