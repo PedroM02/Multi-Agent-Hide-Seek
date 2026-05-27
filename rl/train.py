@@ -1,4 +1,4 @@
-"""Shared-policy IPPO training loop."""
+"""Shared-policy IPPO / MAPPO training loop."""
 
 import argparse
 import csv
@@ -9,16 +9,31 @@ import torch
 
 import agent_utils as au
 from reward_attribution import predator_team_shaped_reward
-from rl.checkpointing import load_checkpoint, save_checkpoint
+from rl.algo import IPPO, MAPPO
+from rl.checkpointing import create_policy, load_checkpoint, save_checkpoint
 from rl.eval_runner import curriculum_phase_for_update, evaluate_policy, sample_num_prey
-from rl.inference import collect_predator_transitions, make_rl_config
-from rl.policy import ActorCritic
-from rl.ppo import PPOConfig, RolloutBuffer, ppo_update
+from rl.inference import collect_predator_transitions, make_rl_config, predator_slot_ids
+from rl.ppo import (
+    MAPPOBuffer,
+    PPOConfig,
+    RolloutBuffer,
+    mappo_update,
+    ppo_update,
+)
 from simulation import SimulationState
 
 
-def collect_rollout(training_rng, policy, device, ppo_cfg, base_config, update, curriculum):
-    buffer = RolloutBuffer()
+def collect_rollout(
+    training_rng,
+    policy,
+    device,
+    ppo_cfg,
+    base_config,
+    update,
+    curriculum,
+    algo=IPPO,
+):
+    buffer = MAPPOBuffer() if algo == MAPPO else RolloutBuffer()
     episode_rewards = []
     episode_lengths = []
 
@@ -40,6 +55,7 @@ def collect_rollout(training_rng, policy, device, ppo_cfg, base_config, update, 
             seed=episode_seed,
         )
         sim = SimulationState(config, random.Random(episode_seed))
+        slot_ids = predator_slot_ids(sim) if algo == MAPPO else None
         episode_reward = 0.0
         episode_steps = 0
         visited_cells = {
@@ -53,9 +69,19 @@ def collect_rollout(training_rng, policy, device, ppo_cfg, base_config, update, 
         while sim.outcome == au.OUTCOME_ONGOING and len(buffer) < ppo_cfg.rollout_steps:
             raw_obs = sim.build_step_observations()
             visited_before = set(visited_cells)
-            predator_actions, transitions = collect_predator_transitions(
-                sim, policy, device, raw_obs, deterministic=False,
+            step_result = collect_predator_transitions(
+                sim,
+                policy,
+                device,
+                raw_obs,
+                deterministic=False,
+                algo=algo,
+                slot_ids=slot_ids,
             )
+            if algo == MAPPO:
+                predator_actions, transitions, team_value, joint_obs = step_result
+            else:
+                predator_actions, transitions = step_result
             continuing = sim.step_once(
                 predator_actions=predator_actions,
                 raw_obs=raw_obs,
@@ -73,16 +99,19 @@ def collect_rollout(training_rng, policy, device, ppo_cfg, base_config, update, 
             episode_reward += reward * len(transitions)
             episode_steps += 1
 
-            for transition in transitions:
-                buffer.add(
-                    transition["obs"],
-                    transition["mask"],
-                    transition["action"],
-                    transition["log_prob"],
-                    transition["value"],
-                    reward,
-                    done,
-                )
+            if algo == MAPPO:
+                buffer.add_step(joint_obs, team_value, reward, done, transitions)
+            else:
+                for transition in transitions:
+                    buffer.add(
+                        transition["obs"],
+                        transition["mask"],
+                        transition["action"],
+                        transition["log_prob"],
+                        transition["value"],
+                        reward,
+                        done,
+                    )
 
         episode_rewards.append(episode_reward)
         episode_lengths.append(episode_steps)
@@ -107,8 +136,15 @@ def apply_exploration_config(ppo_cfg, args):
     ppo_cfg.entropy_floor_coef = args.entropy_floor_coef
 
 
+def run_policy_update(algo, policy, optimizer, buffer, ppo_cfg, device):
+    if algo == MAPPO:
+        return mappo_update(policy, optimizer, buffer, ppo_cfg, device)
+    return ppo_update(policy, optimizer, buffer, ppo_cfg, device)
+
+
 def train(args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    algo = args.algo
     ppo_cfg = PPOConfig(
         rollout_steps=args.rollout_steps,
         lr=args.lr,
@@ -123,7 +159,7 @@ def train(args):
         prey_defend=args.prey_defend,
     )
 
-    policy = ActorCritic().to(device)
+    policy = create_policy(algo, num_predators=args.predators).to(device)
     optimizer = torch.optim.Adam(policy.parameters(), lr=ppo_cfg.lr)
     start_update = 0
     best_eval = -1.0
@@ -131,8 +167,18 @@ def train(args):
     checkpoint_dir = Path(args.checkpoint_dir)
     if args.checkpoint:
         policy, loaded_cfg, payload = load_checkpoint(
-            args.checkpoint, device, policy=policy, optimizer=optimizer,
+            args.checkpoint,
+            device,
+            policy=policy,
+            optimizer=optimizer,
+            algo=algo,
+            num_predators=args.predators,
         )
+        checkpoint_algo = payload.get("algo", IPPO)
+        if checkpoint_algo != algo:
+            raise ValueError(
+                f"Checkpoint algo={checkpoint_algo!r} does not match --algo {algo!r}",
+            )
         ppo_cfg = loaded_cfg
         apply_exploration_config(ppo_cfg, args)
         ppo_cfg.rollout_steps = args.rollout_steps
@@ -170,8 +216,9 @@ def train(args):
             base_config,
             update,
             args.curriculum,
+            algo=algo,
         )
-        metrics = ppo_update(policy, optimizer, buffer, ppo_cfg, device)
+        metrics = run_policy_update(algo, policy, optimizer, buffer, ppo_cfg, device)
         append_csv_row(
             checkpoint_dir / "train_log.csv",
             train_fields,
@@ -205,6 +252,7 @@ def train(args):
                 walls=args.num_walls,
                 wall_size=args.wall_size,
                 prey_defend=args.prey_defend,
+                algo=algo,
             )
             append_csv_row(
                 checkpoint_dir / "eval_log.csv",
@@ -247,7 +295,13 @@ def train(args):
 
 
 def build_arg_parser():
-    parser = argparse.ArgumentParser(description="Train shared-policy IPPO predators.")
+    parser = argparse.ArgumentParser(description="Train shared-policy IPPO / MAPPO predators.")
+    parser.add_argument(
+        "--algo",
+        choices=[IPPO, MAPPO],
+        default=IPPO,
+        help="Training algorithm: shared decentralized critic (ippo) or centralized critic (mappo).",
+    )
     parser.add_argument("--updates", type=int, default=1000)
     parser.add_argument("--predators", type=int, default=3)
     parser.add_argument("--num-walls", type=int, default=2, dest="num_walls")
@@ -273,7 +327,7 @@ def build_arg_parser():
         help="Strength of the entropy-floor penalty.",
     )
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--checkpoint-dir", type=str, default="checkpoints/ippo")
+    parser.add_argument("--checkpoint-dir", type=str, default=None)
     parser.add_argument("--checkpoint", type=str, default=None)
     parser.add_argument("--eval-every", type=int, default=25)
     parser.add_argument("--eval-runs", type=int, default=20)
@@ -294,7 +348,10 @@ def build_arg_parser():
 
 
 def main():
-    train(build_arg_parser().parse_args())
+    args = build_arg_parser().parse_args()
+    if args.checkpoint_dir is None:
+        args.checkpoint_dir = f"checkpoints/{args.algo}"
+    train(args)
 
 
 if __name__ == "__main__":

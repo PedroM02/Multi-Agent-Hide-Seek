@@ -1,11 +1,18 @@
-"""Checkpoint save/load for shared-policy IPPO."""
+"""Checkpoint save/load for IPPO and MAPPO policies."""
 
 from pathlib import Path
 
 import torch
 
-from rl.policy import ActorCritic
+from rl.algo import IPPO, MAPPO
+from rl.policy import ActorCritic, MAPPOActorCritic
 from rl.ppo import PPOConfig
+
+
+def create_policy(algo, num_predators=3):
+    if algo == MAPPO:
+        return MAPPOActorCritic(num_predators=num_predators)
+    return ActorCritic()
 
 
 def save_checkpoint(path, policy, optimizer, update, ppo_cfg, extra=None):
@@ -14,7 +21,10 @@ def save_checkpoint(path, policy, optimizer, update, ppo_cfg, extra=None):
         "optimizer_state": optimizer.state_dict(),
         "update": update,
         "ppo_config": ppo_cfg.__dict__,
+        "algo": MAPPO if isinstance(policy, MAPPOActorCritic) else IPPO,
     }
+    if isinstance(policy, MAPPOActorCritic):
+        payload["num_predators"] = policy.num_predators
     if extra:
         payload.update(extra)
     path = Path(path)
@@ -22,14 +32,18 @@ def save_checkpoint(path, policy, optimizer, update, ppo_cfg, extra=None):
     torch.save(payload, path)
 
 
-def load_checkpoint(path, device, policy=None, optimizer=None):
+def load_checkpoint(path, device, policy=None, optimizer=None, algo=None, num_predators=3):
     try:
         payload = torch.load(path, map_location=device, weights_only=False)
     except TypeError:
         payload = torch.load(path, map_location=device)
+
     ppo_cfg = PPOConfig(**payload.get("ppo_config", {}))
+    resolved_algo = payload.get("algo", algo or IPPO)
+    resolved_predators = int(payload.get("num_predators", num_predators))
+
     if policy is None:
-        policy = ActorCritic()
+        policy = create_policy(resolved_algo, num_predators=resolved_predators)
     policy.load_state_dict(payload["policy_state"])
     policy.to(device)
     if optimizer is not None and "optimizer_state" in payload:

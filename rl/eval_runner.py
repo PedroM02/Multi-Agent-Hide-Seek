@@ -4,7 +4,8 @@ import random
 
 import agent_utils as au
 from reward_attribution import predator_team_reward
-from rl.inference import collect_predator_transitions, make_rl_config
+from rl.algo import IPPO, MAPPO
+from rl.inference import collect_predator_transitions, make_rl_config, predator_slot_ids
 from simulation import BatchSummary, SimulationState, copy_config
 
 
@@ -26,28 +27,39 @@ def curriculum_phase_for_update(update, curriculum_enabled):
     return 3
 
 
-def run_rl_episode(config, rng, policy, device, deterministic=True):
+def run_rl_episode(config, rng, policy, device, deterministic=True, algo=IPPO):
     sim = SimulationState(config, rng)
     total_reward = 0.0
+    slot_ids = predator_slot_ids(sim) if algo == MAPPO else None
 
     while sim.outcome == au.OUTCOME_ONGOING:
         raw_obs = sim.build_step_observations()
-        predator_actions, _ = collect_predator_transitions(
-            sim, policy, device, raw_obs, deterministic=deterministic,
+        step_result = collect_predator_transitions(
+            sim,
+            policy,
+            device,
+            raw_obs,
+            deterministic=deterministic,
+            algo=algo,
+            slot_ids=slot_ids,
         )
+        if algo == MAPPO:
+            predator_actions, _transitions, _team_value, _joint_obs = step_result
+        else:
+            predator_actions, _transitions = step_result
         sim.step_once(predator_actions=predator_actions, raw_obs=raw_obs)
         total_reward += predator_team_reward(sim.last_captured)
 
     return sim.outcome, sim.step_index, total_reward
 
 
-def run_rl_batch(config, num_runs, policy, device, deterministic=True):
+def run_rl_batch(config, num_runs, policy, device, deterministic=True, algo=IPPO):
     accumulator = BatchSummary()
     for run_index in range(num_runs):
         run_config = copy_config(config, seed=config.seed + run_index)
         rng = random.Random(run_config.seed)
         outcome, steps, _reward = run_rl_episode(
-            run_config, rng, policy, device, deterministic=deterministic,
+            run_config, rng, policy, device, deterministic=deterministic, algo=algo,
         )
         accumulator.runs += 1
         accumulator.total_steps += steps
@@ -70,6 +82,7 @@ def evaluate_policy(
     walls=2,
     wall_size=2,
     prey_defend=None,
+    algo=IPPO,
 ):
     results = {}
     for num_prey in prey_counts:
@@ -82,7 +95,7 @@ def evaluate_policy(
             seed=seed,
         )
         summary = run_rl_batch(
-            config, num_runs, policy, device, deterministic=True,
+            config, num_runs, policy, device, deterministic=True, algo=algo,
         )
         win_rate = summary.predator_wins / max(summary.runs, 1)
         results[num_prey] = {

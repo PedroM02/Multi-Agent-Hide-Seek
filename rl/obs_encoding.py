@@ -95,3 +95,15 @@ def action_mask(raw_obs):
     for action in raw_obs.get("legal_actions", ()):
         mask[ACTION_TO_IDX[action]] = True
     return mask
+
+
+def build_joint_predator_obs(raw_obs, predator_slot_ids, agent_lookup):
+    """Concatenate local predator obs in fixed slot order for the centralized critic."""
+    parts = []
+    for agent_id in predator_slot_ids:
+        if agent_id not in raw_obs:
+            parts.append(np.zeros(OBS_DIM, dtype=np.float32))
+            continue
+        agent = agent_lookup.get(agent_id)
+        parts.append(encode_obs(raw_obs[agent_id], agent))
+    return np.concatenate(parts).astype(np.float32)

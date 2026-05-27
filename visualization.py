@@ -105,7 +105,7 @@ def _draw_grid(
     surface.blit(hint_2, (PAD_X, 74))
 
 
-def run_visualization(config, num_runs=1, rl_policy=None, rl_device=None):
+def run_visualization(config, num_runs=1, rl_policy=None, rl_device=None, rl_algo=None):
     pygame.init()
     total_runs = max(1, num_runs)
     run_index = 0
@@ -136,10 +136,15 @@ def run_visualization(config, num_runs=1, rl_policy=None, rl_device=None):
 
     def simulation_step():
         if rl_policy is not None:
+            from rl.algo import IPPO
             from rl.inference import select_predator_actions
 
             predator_actions, raw_obs = select_predator_actions(
-                sim, rl_policy, rl_device, deterministic=True,
+                sim,
+                rl_policy,
+                rl_device,
+                deterministic=True,
+                algo=rl_algo or IPPO,
             )
             sim.step_once(
                 predator_actions=predator_actions,

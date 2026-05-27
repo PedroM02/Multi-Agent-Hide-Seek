@@ -7,10 +7,11 @@ import torch
 from rl.checkpointing import load_checkpoint
 from rl.eval_runner import evaluate_policy
 from simulation import format_batch_summary
+from rl.algo import IPPO, MAPPO
 
 
 def build_arg_parser():
-    parser = argparse.ArgumentParser(description="Evaluate trained IPPO predators.")
+    parser = argparse.ArgumentParser(description="Evaluate trained IPPO / MAPPO predators.")
     parser.add_argument("--checkpoint", type=str, required=True)
     parser.add_argument("--predators", type=int, default=3)
     parser.add_argument("--prey", type=int, default=None, help="If omitted, evaluate 2, 3, and 4 prey.")
@@ -31,7 +32,8 @@ def build_arg_parser():
 def main():
     args = build_arg_parser().parse_args()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    policy, _ppo_cfg, _payload = load_checkpoint(args.checkpoint, device)
+    policy, _ppo_cfg, payload = load_checkpoint(args.checkpoint, device)
+    algo = payload.get("algo", IPPO)
     policy.eval()
 
     prey_counts = [args.prey] if args.prey is not None else [2, 3, 4]
@@ -45,9 +47,10 @@ def main():
         walls=args.num_walls,
         wall_size=args.wall_size,
         prey_defend=args.prey_defend,
+        algo=algo,
     )
 
-    print(f"mean_win_rate={mean_win_rate:.3f}", flush=True)
+    print(f"algo={algo} mean_win_rate={mean_win_rate:.3f}", flush=True)
     for num_prey in prey_counts:
         item = results[num_prey]
         print(format_batch_summary(item["summary"], item["config"]), flush=True)

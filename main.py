@@ -6,12 +6,13 @@ from simulation import SimulationConfig, format_batch_summary, run_batch
 def _load_rl_policy(checkpoint_path):
     import torch
 
+    from rl.algo import IPPO
     from rl.checkpointing import load_checkpoint
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    policy, _ppo_cfg, _payload = load_checkpoint(checkpoint_path, device)
+    policy, _ppo_cfg, payload = load_checkpoint(checkpoint_path, device)
     policy.eval()
-    return policy, device
+    return policy, device, payload.get("algo", IPPO)
 
 
 def main():
@@ -112,10 +113,11 @@ def main():
 
     rl_policy = None
     rl_device = None
+    rl_algo = None
     if config.mode == "rl":
         if args.checkpoint is None:
             parser.error("--mode rl requires --checkpoint")
-        rl_policy, rl_device = _load_rl_policy(args.checkpoint)
+        rl_policy, rl_device, rl_algo = _load_rl_policy(args.checkpoint)
         if config.comms is None:
             config.comms = "both"
 
@@ -123,7 +125,11 @@ def main():
         from visualization import run_visualization
 
         run_visualization(
-            config, args.runs, rl_policy=rl_policy, rl_device=rl_device,
+            config,
+            args.runs,
+            rl_policy=rl_policy,
+            rl_device=rl_device,
+            rl_algo=rl_algo,
         )
         return
 
@@ -131,7 +137,12 @@ def main():
         from rl.eval_runner import run_rl_batch
 
         summary = run_rl_batch(
-            config, args.runs, rl_policy, rl_device, deterministic=True,
+            config,
+            args.runs,
+            rl_policy,
+            rl_device,
+            deterministic=True,
+            algo=rl_algo,
         )
         print(format_batch_summary(summary, config))
         return
