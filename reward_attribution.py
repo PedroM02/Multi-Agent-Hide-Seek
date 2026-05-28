@@ -1,5 +1,6 @@
 import agent_utils as au
 from distances import manhattan
+from rl.team_search import known_prey_positions_from_obs
 
 DEFAULT_STEP_PENALTY = -0.001
 RL_STEP_PENALTY = -0.005
@@ -16,24 +17,14 @@ def predator_team_reward(captured_prey_ids, step_penalty=DEFAULT_STEP_PENALTY):
     return reward
 
 
-def _enemy_positions(active_enemies):
-    positions = set()
-    for item in active_enemies:
-        if len(item) == 4:
-            _, enemy_x, enemy_y, _enemy_id = item
-        else:
-            enemy_x, enemy_y, _enemy_id = item
-        positions.add((enemy_x, enemy_y))
-    return positions
-
-
 def _known_prey_positions(raw_obs, predator_ids):
+    """Team prey targets from visible + comms union (aligned with roles / RL search)."""
     positions = set()
     for agent_id in predator_ids:
         obs = raw_obs.get(agent_id)
         if obs is None:
             continue
-        positions.update(_enemy_positions(obs.get("active_enemies", ())))
+        positions.update(known_prey_positions_from_obs(obs))
     return positions
 
 
@@ -88,8 +79,9 @@ def predator_team_shaped_reward(
     distance_coef=DISTANCE_SHAPING_COEF,
     new_cell_coef=NEW_CELL_SHAPING_COEF,
     dispersion_coef=DISPERSION_SHAPING_COEF,
+    search_mode=False,
 ):
-    """Team reward for RL training: capture bonus, step penalty, search shaping."""
+    """Team reward for RL training: capture bonus, step penalty, optional search shaping."""
     reward = predator_team_reward(captured_prey_ids, step_penalty=step_penalty)
 
     predator_ids = sim.predator_agent_ids()
@@ -113,7 +105,7 @@ def predator_team_shaped_reward(
             and dist_after < dist_before
         ):
             reward += distance_coef * (dist_before - dist_after)
-    else:
+    elif search_mode:
         new_cells = sum(
             1 for position in positions_after
             if position not in visited_cells_before

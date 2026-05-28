@@ -4,7 +4,7 @@ import argparse
 
 import torch
 
-from rl.checkpointing import load_checkpoint
+from rl.checkpointing import checkpoint_use_search, load_checkpoint
 from rl.eval_runner import evaluate_policy
 from simulation import format_batch_summary
 from rl.algo import IPPO, MAPPO
@@ -35,6 +35,7 @@ def main():
     policy, _ppo_cfg, payload = load_checkpoint(args.checkpoint, device)
     algo = payload.get("algo", IPPO)
     policy.eval()
+    use_search = checkpoint_use_search(payload)
 
     prey_counts = [args.prey] if args.prey is not None else [2, 3, 4]
     results, mean_win_rate = evaluate_policy(
@@ -48,9 +49,13 @@ def main():
         wall_size=args.wall_size,
         prey_defend=args.prey_defend,
         algo=algo,
+        use_search=use_search,
     )
 
-    print(f"algo={algo} mean_win_rate={mean_win_rate:.3f}", flush=True)
+    print(
+        f"algo={algo} use_search={use_search} mean_win_rate={mean_win_rate:.3f}",
+        flush=True,
+    )
     for num_prey in prey_counts:
         item = results[num_prey]
         print(format_batch_summary(item["summary"], item["config"]), flush=True)

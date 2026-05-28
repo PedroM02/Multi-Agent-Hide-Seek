@@ -54,6 +54,16 @@ class ActorCritic(nn.Module):
         log_prob = dist.log_prob(action)
         return action, log_prob, value
 
+    def evaluate_action(self, obs, action_mask, action):
+        """Log-probability and value for a fixed action index."""
+        dist, value = self.forward(obs, action_mask)
+        if not torch.is_tensor(action):
+            action = torch.tensor(action, device=obs.device, dtype=torch.long)
+        if action.dim() == 0:
+            action = action.unsqueeze(0)
+        log_prob = dist.log_prob(action)
+        return log_prob, value
+
 
 class MAPPOActorCritic(nn.Module):
     """Shared decentralized actor + centralized team critic (MAPPO)."""
@@ -86,6 +96,14 @@ class MAPPOActorCritic(nn.Module):
             action = dist.sample()
         log_prob = dist.log_prob(action)
         return action, log_prob
+
+    def evaluate_action(self, obs, action_mask, action):
+        dist = self.actor(obs, action_mask)
+        if not torch.is_tensor(action):
+            action = torch.tensor(action, device=obs.device, dtype=torch.long)
+        if action.dim() == 0:
+            action = action.unsqueeze(0)
+        return dist.log_prob(action)
 
     def evaluate_actions(self, obs, action_mask, actions):
         dist = self.actor(obs, action_mask)

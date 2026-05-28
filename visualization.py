@@ -105,7 +105,14 @@ def _draw_grid(
     surface.blit(hint_2, (PAD_X, 74))
 
 
-def run_visualization(config, num_runs=1, rl_policy=None, rl_device=None, rl_algo=None):
+def run_visualization(
+    config,
+    num_runs=1,
+    rl_policy=None,
+    rl_device=None,
+    rl_algo=None,
+    rl_use_search=False,
+):
     pygame.init()
     total_runs = max(1, num_runs)
     run_index = 0
@@ -133,6 +140,11 @@ def run_visualization(config, num_runs=1, rl_policy=None, rl_device=None, rl_alg
 
     summary = BatchSummary()
     logged_runs = set()
+    search_controller = None
+    if rl_policy is not None and rl_use_search:
+        from rl.team_search import PredatorSearchController
+
+        search_controller = PredatorSearchController()
 
     def simulation_step():
         if rl_policy is not None:
@@ -143,6 +155,7 @@ def run_visualization(config, num_runs=1, rl_policy=None, rl_device=None, rl_alg
                 sim,
                 rl_policy,
                 rl_device,
+                search_controller,
                 deterministic=True,
                 algo=rl_algo or IPPO,
             )
@@ -180,11 +193,13 @@ def run_visualization(config, num_runs=1, rl_policy=None, rl_device=None, rl_alg
         )
 
     def load_run(idx):
-        nonlocal run_index, run_seed, rng, sim
+        nonlocal run_index, run_seed, rng, sim, search_controller
         run_index = idx
         run_seed = config.seed + run_index
         rng = random.Random(run_seed)
         sim = SimulationState(config, rng)
+        if search_controller is not None:
+            search_controller.reset()
 
     def try_advance_run():
         if run_index + 1 >= total_runs:

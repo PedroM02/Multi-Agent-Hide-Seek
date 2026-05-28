@@ -12,7 +12,7 @@ def _load_rl_policy(checkpoint_path):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     policy, _ppo_cfg, payload = load_checkpoint(checkpoint_path, device)
     policy.eval()
-    return policy, device, payload.get("algo", IPPO)
+    return policy, device, payload.get("algo", IPPO), payload
 
 
 def main():
@@ -114,10 +114,14 @@ def main():
     rl_policy = None
     rl_device = None
     rl_algo = None
+    rl_use_search = False
     if config.mode == "rl":
         if args.checkpoint is None:
             parser.error("--mode rl requires --checkpoint")
-        rl_policy, rl_device, rl_algo = _load_rl_policy(args.checkpoint)
+        rl_policy, rl_device, rl_algo, rl_payload = _load_rl_policy(args.checkpoint)
+        from rl.checkpointing import checkpoint_use_search
+
+        rl_use_search = checkpoint_use_search(rl_payload)
         if config.comms is None:
             config.comms = "both"
 
@@ -130,6 +134,7 @@ def main():
             rl_policy=rl_policy,
             rl_device=rl_device,
             rl_algo=rl_algo,
+            rl_use_search=rl_use_search,
         )
         return
 
@@ -143,6 +148,7 @@ def main():
             rl_device,
             deterministic=True,
             algo=rl_algo,
+            use_search=rl_use_search,
         )
         print(format_batch_summary(summary, config))
         return

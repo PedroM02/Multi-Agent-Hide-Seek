@@ -34,14 +34,24 @@ existing `_flee` / wander heuristics. Training uses `--comms both`
 (single-hop), default walls (`--walls 2 --wall-size 2`), 3 predators,
 and randomizes prey count in `{2, 3, 4}` each episode.
 
+Pass `--search` on `rl.train` to enable the per-agent search heuristic when an
+agent has no prey in the same visible+comms union as `--mode roles --searcher`
+(immediate entry/exit; not learned by the policy). Other predators keep using the
+neural policy. Checkpoints store `use_search`; evaluation and GUI apply search
+automatically when loading those checkpoints (no eval flag).
+
 ```bash
 pip install -r requirements.txt
 
-# Train (headless)
-python -m rl.train --updates 1000 --predators 3 --eval-every 25 --seed 0
+# Train without search heuristic (policy-only at eval)
+python -m rl.train --algo mappo --updates 1000 --predators 3 --seed 0
 
-# Evaluate a checkpoint (all prey counts)
-python -m rl.evaluate --checkpoint checkpoints/ippo/best_eval.pt --runs 50 --seed 0
+# Train with per-agent search heuristic (eval uses policy + search)
+python -m rl.train --algo mappo --search --updates 1000 --predators 3 --seed 0 \
+  --checkpoint-dir checkpoints/mappo_search
+
+# Evaluate (search on/off follows checkpoint metadata)
+python -m rl.evaluate --checkpoint checkpoints/mappo_search/best_eval.pt --runs 50 --seed 0
 
 # Batch inference for one prey count
 python main.py --mode rl --checkpoint checkpoints/ippo/best_eval.pt \

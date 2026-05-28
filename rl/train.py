@@ -13,6 +13,7 @@ from rl.algo import IPPO, MAPPO
 from rl.checkpointing import create_policy, load_checkpoint, save_checkpoint
 from rl.eval_runner import curriculum_phase_for_update, evaluate_policy, sample_num_prey
 from rl.inference import collect_predator_transitions, make_rl_config, predator_slot_ids
+from rl.team_search import PredatorSearchController
 from rl.ppo import (
     MAPPOBuffer,
     PPOConfig,
@@ -32,6 +33,7 @@ def collect_rollout(
     update,
     curriculum,
     algo=IPPO,
+    use_search=False,
 ):
     buffer = MAPPOBuffer() if algo == MAPPO else RolloutBuffer()
     episode_rewards = []
@@ -56,6 +58,9 @@ def collect_rollout(
         )
         sim = SimulationState(config, random.Random(episode_seed))
         slot_ids = predator_slot_ids(sim) if algo == MAPPO else None
+        search_controller = (
+            PredatorSearchController() if use_search else None
+        )
         episode_reward = 0.0
         episode_steps = 0
         visited_cells = {
@@ -74,14 +79,17 @@ def collect_rollout(
                 policy,
                 device,
                 raw_obs,
+                search_controller,
                 deterministic=False,
                 algo=algo,
                 slot_ids=slot_ids,
             )
             if algo == MAPPO:
-                predator_actions, transitions, team_value, joint_obs = step_result
+                predator_actions, transitions, team_value, joint_obs, search_mode = (
+                    step_result
+                )
             else:
-                predator_actions, transitions = step_result
+                predator_actions, transitions, search_mode = step_result
             continuing = sim.step_once(
                 predator_actions=predator_actions,
                 raw_obs=raw_obs,
@@ -94,6 +102,7 @@ def collect_rollout(
                 raw_obs,
                 sim.last_captured,
                 visited_before,
+                search_mode=search_mode,
             )
             done = not continuing
             episode_reward += reward * len(transitions)
@@ -217,6 +226,7 @@ def train(args):
             update,
             args.curriculum,
             algo=algo,
+            use_search=args.search,
         )
         metrics = run_policy_update(algo, policy, optimizer, buffer, ppo_cfg, device)
         append_csv_row(
@@ -238,7 +248,10 @@ def train(args):
             optimizer,
             update + 1,
             ppo_cfg,
-            extra={"best_eval_score": best_eval},
+            extra={
+                "best_eval_score": best_eval,
+                "use_search": bool(args.search),
+            },
         )
 
         if (update + 1) % args.eval_every == 0:
@@ -253,6 +266,7 @@ def train(args):
                 wall_size=args.wall_size,
                 prey_defend=args.prey_defend,
                 algo=algo,
+                use_search=args.search,
             )
             append_csv_row(
                 checkpoint_dir / "eval_log.csv",
@@ -280,7 +294,10 @@ def train(args):
                     optimizer,
                     update + 1,
                     ppo_cfg,
-                    extra={"best_eval_score": best_eval},
+                    extra={
+                        "best_eval_score": best_eval,
+                        "use_search": bool(args.search),
+                    },
                 )
 
         if (update + 1) % args.save_every == 0:
@@ -290,7 +307,10 @@ def train(args):
                 optimizer,
                 update + 1,
                 ppo_cfg,
-                extra={"best_eval_score": best_eval},
+                extra={
+                    "best_eval_score": best_eval,
+                    "use_search": bool(args.search),
+                },
             )
 
 
@@ -343,6 +363,14 @@ def build_arg_parser():
         default=None,
         dest="prey_defend",
         help="Enable cooperative prey knockout (stun or kill). Omit to disable.",
+    )
+    parser.add_argument(
+        "--search",
+        action="store_true",
+        help=(
+            "Per-agent roles search when no prey in visible+comms union (not learned). "
+            "Saved in checkpoint; eval/GUI enable search for checkpoints trained with this flag."
+        ),
     )
     return parser
 

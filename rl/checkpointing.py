@@ -49,3 +49,8 @@ def load_checkpoint(path, device, policy=None, optimizer=None, algo=None, num_pr
     if optimizer is not None and "optimizer_state" in payload:
         optimizer.load_state_dict(payload["optimizer_state"])
     return policy, ppo_cfg, payload
+
+
+def checkpoint_use_search(payload):
+    """Whether this checkpoint was trained with per-agent search heuristic."""
+    return bool(payload.get("use_search", payload.get("hybrid_search", False)))
