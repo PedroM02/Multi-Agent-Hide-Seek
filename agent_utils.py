@@ -1,6 +1,3 @@
-"""Simulation constants and position deltas from actions."""
-
-
 # Teams
 TEAM_PREDATOR = "predator"
 TEAM_PREY = "prey"
@@ -34,10 +31,9 @@ MODE_RANDOM = "random"
 MODE_CHASE = "chase"
 MODE_ROLES = "roles"
 MODE_OPTIMAL = "optimal"
-MODE_PACK = "pack"
 MODE_RL = "rl"
 
-# Agent roles. Active only when mode is "roles"
+# Agent roles
 ROLE_CHASER = "chaser"
 ROLE_FLEE = "flee"
 ROLE_FLANKER = "flanker"

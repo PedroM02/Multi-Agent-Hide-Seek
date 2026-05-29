@@ -1,12 +1,12 @@
 from decision_making import DecisionMaking
 from perception import Perception
-
 import random
-
 import agent_utils as au
 
 
 class Agent:
+    '''Agent class that holds internal state of the agent'''
+
     def __init__(self, agent_id, team, perception, decision, rng):
         self.agent_id = agent_id
         self.team = team
@@ -14,15 +14,13 @@ class Agent:
         self.decision = decision
         self.rng = rng
         self.last_seen_enemy = None
-        # Persisted cardinal direction while ROLE_SEARCHER (`--searcher`).
         self.search_heading = None
-        # Ally ids visible last step while searching (re-head on new entries).
         self.search_seen_ally_ids = set()
-        # Written each step by derive_role in `--mode roles` (for GUI).
         self.role = None
         self.role_target = None
 
     def reset_memory(self):
+        '''Resets the memory of the agent to empty defaults'''
         self.last_seen_enemy = None
         self.search_heading = None
         self.search_seen_ally_ids = set()
@@ -30,116 +28,104 @@ class Agent:
         self.role_target = None
 
     def update_memory_from_obs(self, obs):
-        """Refresh `last_seen_enemy` from fused `active_enemies`."""
+        """Refresh last_seen_enemy from active_enemies, which include visible enemies and communicated enemies"""
+        
+        # If decision mode is optimal, agents have full view of the environment and do not need to update their memory
         if self.decision.mode == au.MODE_OPTIMAL:
             return
-        active = obs.get("active_enemies", ())
-        if not active:
+        # Retrieve active enemies from observation    
+        active_enemies = obs.get("active_enemies", ())
+        if not active_enemies:
             return
-        visible_position = self.perception.update_last_seen_enemy(
-            obs["agent_x"], obs["agent_y"], active, self.rng,
-        )
-        if visible_position is not None:
-            self.last_seen_enemy = visible_position
+        # Update last seen enemy memory to closest visible enemy from perception
+        closest_enemy_position = self.perception.update_last_seen_enemy(obs["agent_x"], obs["agent_y"], active_enemies, self.rng)
+        if closest_enemy_position is not None:
+            self.last_seen_enemy = closest_enemy_position
 
     def clear_stale_memory_if_at_cell(self, obs):
-        """Drop memory when standing on a stale last-seen cell with no prey known."""
+        """Clear memory when standing on last seen prey cell with no prey there nor any prey known (both visible and communicated)"""
+
+        # If we still have active enemies, then last seen enemy memory is still valid and it is the position of the closest enemy
         if obs.get("active_enemies", ()):
             return
-        last_seen = self.last_seen_enemy
-        if last_seen is None:
+        # If no memory of enemy is stored, then there is no memory to clear
+        if self.last_seen_enemy is None:
             return
-        if (obs["agent_x"], obs["agent_y"]) == last_seen:
+        # If the agent is standing on the last seen enemy cell, then clear the memory
+        if (obs["agent_x"], obs["agent_y"]) == self.last_seen_enemy:
             self.last_seen_enemy = None
 
     def clear_memory_at_positions(self, positions):
+        '''Clear memory when standing on a cell that contained a prey which was consumed in the current step. RL only'''
         if self.last_seen_enemy is not None and self.last_seen_enemy in positions:
             self.last_seen_enemy = None
 
     def prepare_observation(self, obs, shared_enemies, shared_allies=()):
-        """Fuse the raw observation with teammate reports.
-
-        Run once per step before decide. The agent uses its perception
-        module to collapse direct sight + teammate reports into a single
-        priority-resolved `active_enemies` set.
-        """
-        obs["shared_enemies"] = shared_enemies
-        obs["shared_allies"] = shared_allies
-        obs["active_enemies"] = self.perception.compute_active_enemies(
-            obs["visible_enemies"], shared_enemies,
-        )
+        """Prepare observation for this step (delegates to perception)."""
+        self.perception.prepare_observation(obs, shared_enemies, shared_allies)
 
     def decide(self, obs):
-        assert obs["agent_id"] == self.agent_id
-        assert obs["team"] == self.team
+        """Returns action intention considering roles, if enabled"""
 
+        # Update memory
         self.update_memory_from_obs(obs)
 
-        obs_for_decision = obs
+        # Update role if enabled
         if self.decision.mode == au.MODE_ROLES:
             prev_role = self.role
+            # Derive new role and role target position
             self.role, self.role_target = self.decision.derive_role(obs)
+            # If search is enabled and it's the agent's role, get the agent's search direction
+            # Heading is chosen when entering search and again when there is a new visible ally, to ensure dispersion
             if self.decision.searcher_enabled:
                 if self.role == au.ROLE_SEARCHER:
-                    visible_ally_ids = {
-                        ally_id
-                        for _, _, ally_id in obs.get("visible_allies", ())
-                    }
+                    # Get visible allies from observation
+                    visible_ally_ids = {ally_id for ally_x, ally_y, ally_id in obs.get("visible_allies", ())}
+                    # If it's the first time searching, calculate search direction
                     if prev_role != au.ROLE_SEARCHER:
-                        self.search_heading = (
-                            self.decision.init_search_heading(obs)
-                        )
+                        self.search_heading = (self.decision.init_search_heading(obs))
+                    # If the visible allies contains a new ally, recalculate search direction
                     elif visible_ally_ids - self.search_seen_ally_ids:
-                        self.search_heading = (
-                            self.decision.init_search_heading(obs)
-                        )
+                        self.search_heading = (self.decision.init_search_heading(obs))
                     self.search_seen_ally_ids = visible_ally_ids
                 else:
                     self.search_heading = None
                     self.search_seen_ally_ids = set()
-            obs_for_decision = dict(obs)
-            obs_for_decision["role"] = self.role
-            obs_for_decision["role_target"] = self.role_target
-            obs_for_decision["search_heading"] = self.search_heading
+            
+            # Add information to observation for decision making
+            obs["role"] = self.role
+            obs["role_target"] = self.role_target
+            obs["search_heading"] = self.search_heading
         else:
             self.role = None
             self.role_target = None
 
-        action, clear_memory = self.decision.choose_action(
-            obs_for_decision, self.last_seen_enemy,
-        )
-        if clear_memory:
-            self.last_seen_enemy = None
+        # Get action intention from decision making and clear stale memory
+        action = self.decision.choose_action(obs, self.last_seen_enemy)
+        self.clear_stale_memory_if_at_cell(obs)
         return action
 
 
 def build_agents_for_env(env, rng, config):
+    '''Builds agents' logic modules to associate with bodies created in the environment'''
+
     agents = []
-    for body in sorted(env.agent_bodies.values(), key=lambda body: body.agent_id):
-        # Each agent gets its own RNGs seeded from the parent — avoids
-        # coupled "random" choices where both agents draw from the same
-        # generator state in the same step. Perception and decision use
-        # independent streams so tiebreak draws can't bias action choice.
-        decision_seed = rng.randint(0, 2**31)
-        perception_seed = rng.randint(0, 2**31)
-        decision_mode = (
-            config.mode if body.team == au.TEAM_PREDATOR else au.MODE_CHASE
-        )
-        agents.append(
-            Agent(
-                agent_id=body.agent_id,
-                team=body.team,
-                perception=Perception(),
-                decision=DecisionMaking(
-                    random.Random(decision_seed),
-                    mode=decision_mode,
-                    searcher_enabled=(
-                        config.roles_searcher
-                        if body.team == au.TEAM_PREDATOR
-                        else False
-                    ),
-                ),
-                rng=random.Random(perception_seed),
-            )
-        )
+    # Iterate over agent bodies in order of agent ID
+    for agent_id in sorted(env.agent_bodies):
+        # Retrieve agent body
+        agent_body = env.agent_bodies[agent_id]
+        # Get individual seeds for perception and decision
+        decision_seed = rng.randint(0, 10**10)
+        perception_seed = rng.randint(0, 10**10)
+        # Define predators' decision mode.Prey always flee, so they do not consider any decision modes
+        decision_mode = (config.mode if agent_body.team == au.TEAM_PREDATOR else au.MODE_CHASE)
+        # Create agent and add to list of agents
+        agents.append(Agent(agent_id=agent_id,
+                            team=agent_body.team,
+                            perception=Perception(),
+                            decision=DecisionMaking(rng=random.Random(decision_seed),
+                                                    mode=decision_mode,
+                                                    searcher_enabled=(config.roles_searcher if agent_body.team == au.TEAM_PREDATOR else False)),
+                            rng=random.Random(perception_seed)))
+    
     return agents
