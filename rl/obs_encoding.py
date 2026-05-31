@@ -2,13 +2,13 @@
 
 import numpy as np
 
-import agent_utils as au
+import constants as co
 
 OBS_DIM = 102
 GRID_CHANNELS = 4
 PATCH_SIZE = 5
 
-ACTIONS = au.MOVE_ACTIONS
+ACTIONS = co.MOVE_ACTIONS
 ACTION_TO_IDX = {action: index for index, action in enumerate(ACTIONS)}
 IDX_TO_ACTION = {index: action for action, index in ACTION_TO_IDX.items()}
 NUM_ACTIONS = len(ACTIONS)

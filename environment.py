@@ -1,20 +1,16 @@
-import agent_utils as au
+import constants as co
+from utils import apply_action, in_grid_bounds
 
 
 class AgentBody:
-    """Defines an agent's body/physical presence in the environment."""
+    """Defines an agent's body/physical presence in the environment. Includes agent's Id, team, position,
+       whether it is alive and the number of turns it has been stunned for"""
     def __init__(self, agent_id, team, x, y, alive=True):
         self.agent_id = agent_id
         self.team = team
         self.x = x
         self.y = y
         self.alive = alive
-        # Steps of "stun" remaining for this body. Only predators are
-        # ever stunned (by the cooperative-knockout mechanic, opt-in
-        # via --prey-defend). While stun_remaining > 0 the action
-        # resolver still moves the agent according to its intention,
-        # but the simulation overrides that intention to STAY and the
-        # capture pass skips the predator. 0 is the "active" state.
         self.stun_remaining = 0
 
 
@@ -35,17 +31,16 @@ class Environment:
         if walls:
             for wall_x, wall_y in walls:
                 # Check if the wall is in bounds
-                if self.is_in_bounds(wall_x, wall_y):
+                if in_grid_bounds(wall_x, wall_y, self.width, self.height):
                     self.wall_cells.add((wall_x, wall_y))
 
 
-    def is_in_bounds(self, x, y):
-        return 0 <= x < self.width and 0 <= y < self.height
-
     def is_wall(self, x, y):
+        '''Returns True if the cell at (x,y) is a wall'''
         return (x, y) in self.wall_cells
 
     def get_free_cells(self):
+        '''Returns a list of all cells in map that are not walls'''
         free_cells = []
         for x in range(self.width):
             for y in range(self.height):
@@ -54,17 +49,19 @@ class Environment:
         return free_cells
 
 
-    def place_agent(self, body):
+    def place_agent(self, agent_body):
+        '''Places an agent in the environment if its assigned position is valid'''
         # Check agent position is in bounds
-        if not self.is_in_bounds(body.x, body.y):
+        if not in_grid_bounds(agent_body.x, agent_body.y, self.width, self.height):
             raise ValueError("Agent position is out of bounds")
         # Check agent position is not on a wall
-        if self.is_wall(body.x, body.y):
+        if self.is_wall(agent_body.x, agent_body.y):
             raise ValueError("Agent position is on a wall")
 
-        self.agent_bodies[body.agent_id] = body
+        self.agent_bodies[agent_body.agent_id] = agent_body
 
     def set_agent_positions(self, num_predators, num_prey, rng, first_id=0):
+        '''Assigns available map positions to agent bodies and places them in the environment. First predators, then prey'''
 
         # Reset agent bodies and get available cells to place agents
         self.agent_bodies.clear()
@@ -76,52 +73,53 @@ class Environment:
         # Shuffle free cell list so they are not in a specific order
         rng.shuffle(free_cells)
 
-        # Place predators and prey in the environment
-        bodies = []
-        idx = 0 # Common index for free cells so prey are placed in cells where predators were not placed
+        # Place predators and prey in the environment with common index for free cells so prey are placed in cells where predators were not placed
+        idx = 0
         agent_id = first_id
         for _ in range(num_predators):
             x, y = free_cells[idx]
             idx += 1
-            agent_body = AgentBody(agent_id, au.TEAM_PREDATOR, x, y)
+            agent_body = AgentBody(agent_id, co.TEAM_PREDATOR, x, y)
             self.place_agent(agent_body)
-            bodies.append(agent_body)
             agent_id += 1
         for _ in range(num_prey):
             x, y = free_cells[idx]
             idx += 1
-            agent_body = AgentBody(agent_id, au.TEAM_PREY, x, y)
+            agent_body = AgentBody(agent_id, co.TEAM_PREY, x, y)
             self.place_agent(agent_body)
-            bodies.append(agent_body)
             agent_id += 1
 
     def alive_bodies(self):
-        for agent_body in self.agent_bodies.values():
-            if agent_body.alive:
-                yield agent_body
+        '''Returns agent bodies that are alive'''
+        return [agent_body for agent_body in self.agent_bodies.values() if agent_body.alive]
+
+    def alive_predator_ids(self):
+        '''Returns IDs os all alive predators'''
+        return [body.agent_id for body in self.alive_bodies() if body.team == co.TEAM_PREDATOR]
 
     def legal_actions(self, agent_id):
+        '''Returns a tuple of all legal actions for a given agent'''
         agent_body = self.agent_bodies[agent_id]
         output_actions = []
         # If agent is not alive, it must not do anything
         if not agent_body.alive:
-            return (au.STAY,)
+            return (co.STAY,)
 
         # Check all possible movement actions and assess legality
-        for action in au.MOVE_ACTIONS:
-            delta_x, delta_y = au.ACTION_DELTA[action]
-            next_x, next_y = agent_body.x + delta_x, agent_body.y + delta_y
+        for action in co.MOVE_ACTIONS:
+            next_x, next_y = apply_action(agent_body.x, agent_body.y, action)
 
-            if not self.is_in_bounds(next_x, next_y) or self.is_wall(next_x, next_y):
-                # Failsafe to guarantee agent has always a legal action if somehow ends up in an unexpected situation
-                if action == au.STAY:
-                    output_actions.append(au.STAY)
+            if not in_grid_bounds(next_x, next_y, self.width, self.height) or self.is_wall(next_x, next_y):
+                # Failsafe: guarantee agent has always a legal action if somehow ends up in an unexpected situation
+                if action == co.STAY:
+                    output_actions.append(co.STAY)
                 continue
             output_actions.append(action)
 
         return tuple(output_actions)
 
     def set_position(self, agent_id, x, y):
+        '''Sets the positional attributes of an agent body'''
         agent_body = self.agent_bodies[agent_id]
         agent_body.x, agent_body.y = x, y
 
@@ -133,19 +131,11 @@ class Environment:
             cells_with_agents[agent_cell] = cells_with_agents.get(agent_cell, []) + [agent_body]
         
         # Check if there are predators and prey in the same cell and capture the prey.
-        # Stunned predators (stun_remaining > 0) are skipped here: they
-        # cannot capture for the duration of the stun, so a prey
-        # co-located with only stunned predators is not lost. A prey
-        # sharing a cell with at least one *active* predator is still
-        # captured normally.
+        # Stunned predators (stun_remaining > 0) are skipped here since stunned predators do not capture
         captured = []
         for cell, bodies_in_cell in cells_with_agents.items():
-            preds = [
-                agent_body for agent_body in bodies_in_cell
-                if agent_body.team == au.TEAM_PREDATOR
-                and agent_body.stun_remaining == 0
-            ]
-            preys = [agent_body for agent_body in bodies_in_cell if agent_body.team == au.TEAM_PREY]
+            preds = [agent_body for agent_body in bodies_in_cell if agent_body.team == co.TEAM_PREDATOR and agent_body.stun_remaining == 0]
+            preys = [agent_body for agent_body in bodies_in_cell if agent_body.team == co.TEAM_PREY]
             if preds and preys:
                 for prey in preys:
                     prey.alive = False
@@ -153,7 +143,7 @@ class Environment:
         return captured
 
     def any_prey_alive(self):
-        return any(agent_body.team == au.TEAM_PREY and agent_body.alive for agent_body in self.agent_bodies.values())
+        return any(agent_body.team == co.TEAM_PREY and agent_body.alive for agent_body in self.agent_bodies.values())
 
     def any_predator_alive(self):
-        return any(agent_body.team == au.TEAM_PREDATOR and agent_body.alive for agent_body in self.agent_bodies.values())
+        return any(agent_body.team == co.TEAM_PREDATOR and agent_body.alive for agent_body in self.agent_bodies.values())

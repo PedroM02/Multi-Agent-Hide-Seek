@@ -2,7 +2,6 @@
 
 import random
 
-from decision_making import _iter_enemy_sightings
 from decision_making import DecisionMaking
 
 
@@ -12,10 +11,7 @@ def known_prey_positions_from_obs(obs):
         return set()
     positions = set()
     seen_ids = set()
-    for enemy_x, enemy_y, enemy_id in _iter_enemy_sightings(
-        obs.get("visible_enemies", ()),
-        obs.get("shared_enemies", ()),
-    ):
+    for enemy_x, enemy_y, enemy_id in obs.get("known_enemies", ()):
         if enemy_id in seen_ids:
             continue
         seen_ids.add(enemy_id)
@@ -86,7 +82,7 @@ def choose_search_action(search_logic, agent, raw_obs):
     obs_for_search = dict(raw_obs)
     obs_for_search["search_heading"] = agent.search_heading
     legal = list(raw_obs["legal_actions"])
-    return search_logic._search(obs_for_search, legal)
+    return search_logic.search(obs_for_search, legal)
 
 
 def any_agent_in_search(agent_in_search):

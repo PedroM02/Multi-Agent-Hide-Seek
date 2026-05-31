@@ -1,4 +1,5 @@
-import agent_utils as au
+import constants as co
+from utils import apply_action, in_grid_bounds
 
 
 def calculate_target_cell(env, agent_id, move_intentions):
@@ -14,12 +15,10 @@ def calculate_target_cell(env, agent_id, move_intentions):
     # If agent is not alive, it stays in place
     if not agent_body.alive:
         return (agent_body.x, agent_body.y)
-
     # Calculate target coordinates given intended action and its coordinates' deltas
-    delta_x, delta_y = au.ACTION_DELTA[action]
-    target_x, target_y = agent_body.x + delta_x, agent_body.y + delta_y
+    target_x, target_y = apply_action(agent_body.x, agent_body.y, action)
     # If target coordinates are out of bounds, agent stays in place
-    if not (0 <= target_x < env.width and 0 <= target_y < env.height):
+    if not in_grid_bounds(target_x, target_y, env.width, env.height):
         return (agent_body.x, agent_body.y)
     # If target coordinates are on a wall, agent stays in place
     if env.is_wall(target_x, target_y):
@@ -35,15 +34,15 @@ def calculate_target_cell(env, agent_id, move_intentions):
             continue
         # If the other agent belongs to the same team, check its move intention
         if other_agent_body.team == agent_body.team:
-            other_agent_action = move_intentions.get(other_agent_body.agent_id, au.STAY)
-            other_agent_delta_x, other_agent_delta_y = au.ACTION_DELTA[other_agent_action]
+            other_agent_action = move_intentions.get(other_agent_body.agent_id, co.STAY)
+            other_agent_target = apply_action(other_agent_body.x, other_agent_body.y, other_agent_action)
             # If the other agent is occupying target cell because it is staying, then the agent cannot move into target cell
-            if other_agent_delta_x == 0 and other_agent_delta_y == 0:
+            if other_agent_target == (other_agent_body.x, other_agent_body.y):
                 return (agent_body.x, agent_body.y)
         else:
             # If agent is a prey and the other agent is a predator, then the agent cannot move into target cell
             # However, the reverse can happen and will result in capture
-            if agent_body.team == au.TEAM_PREY:
+            if agent_body.team == co.TEAM_PREY:
                 return (agent_body.x, agent_body.y)
 
     return (target_x, target_y)
@@ -58,14 +57,14 @@ def resolve_actions(env, intentions):
     # Retrieve all alive agents' IDs
     alive_ids = [agent_id for agent_id, agent_body in env.agent_bodies.items() if agent_body.alive]
     # Build dict with move intentions for all alive agents ensuring missing intentions are set to staying
-    move_intentions = {agent_id: intentions.get(agent_id, au.STAY) for agent_id in alive_ids}
+    move_intentions = {agent_id: intentions.get(agent_id, co.STAY) for agent_id in alive_ids}
     # Build dict with target cells for all alive agents given their intended actions
     targets = {agent_id: calculate_target_cell(env, agent_id, move_intentions) for agent_id in move_intentions}
 
     # Initialize dict for next positions of all alive agents. This will be updated
     next_pos = {agent_id: (env.agent_bodies[agent_id].x, env.agent_bodies[agent_id].y) for agent_id in alive_ids}
     # Iterate over each team and resolve conflicts between same-team agents whose target cells are the same
-    teams = (au.TEAM_PREDATOR, au.TEAM_PREY)
+    teams = (co.TEAM_PREDATOR, co.TEAM_PREY)
 
     for team in teams:
         # Retrieve agent IDs in current team

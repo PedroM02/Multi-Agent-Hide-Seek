@@ -7,8 +7,8 @@ from pathlib import Path
 
 import torch
 
-import agent_utils as au
-from reward_attribution import predator_team_shaped_reward
+import constants as co
+from rl.reward_attribution import predator_team_shaped_reward
 from rl.algo import IPPO, MAPPO
 from rl.checkpointing import create_policy, load_checkpoint, save_checkpoint
 from rl.eval_runner import curriculum_phase_for_update, evaluate_policy, sample_num_prey
@@ -21,7 +21,7 @@ from rl.ppo import (
     mappo_update,
     ppo_update,
 )
-from simulation import SimulationState
+from simulation import Run
 
 
 def collect_rollout(
@@ -36,13 +36,13 @@ def collect_rollout(
     use_search=False,
 ):
     buffer = MAPPOBuffer() if algo == MAPPO else RolloutBuffer()
-    episode_rewards = []
-    episode_lengths = []
+    run_rewards = []
+    run_lengths = []
 
     while len(buffer) < ppo_cfg.rollout_steps:
         phase = curriculum_phase_for_update(update, curriculum)
         num_prey = sample_num_prey(training_rng, phase)
-        episode_seed = training_rng.randint(0, 2**31 - 1)
+        run_seed = training_rng.randint(0, 2**31 - 1)
         config = make_rl_config(
             width=base_config.width,
             height=base_config.height,
@@ -54,31 +54,31 @@ def collect_rollout(
             num_walls=base_config.num_walls,
             wall_size=base_config.wall_size,
             prey_defend=base_config.prey_defend,
-            seed=episode_seed,
+            seed=run_seed,
         )
-        sim = SimulationState(config, random.Random(episode_seed))
-        slot_ids = predator_slot_ids(sim) if algo == MAPPO else None
+        run = Run(config, random.Random(run_seed))
+        slot_ids = predator_slot_ids(run) if algo == MAPPO else None
         search_controller = (
             PredatorSearchController() if use_search else None
         )
-        episode_reward = 0.0
-        episode_steps = 0
+        run_reward = 0.0
+        run_steps = 0
         visited_cells = {
             (
-                sim.env.agent_bodies[agent_id].x,
-                sim.env.agent_bodies[agent_id].y,
+                run.env.agent_bodies[agent_id].x,
+                run.env.agent_bodies[agent_id].y,
             )
-            for agent_id in sim.predator_agent_ids()
+            for agent_id in run.env.alive_predator_ids()
         }
 
-        while sim.outcome == au.OUTCOME_ONGOING and len(buffer) < ppo_cfg.rollout_steps:
-            raw_obs = sim.build_step_observations()
+        while run.outcome == co.OUTCOME_ONGOING and len(buffer) < ppo_cfg.rollout_steps:
+            all_obs = run.build_step_observations()
             visited_before = set(visited_cells)
             step_result = collect_predator_transitions(
-                sim,
+                run,
                 policy,
                 device,
-                raw_obs,
+                all_obs,
                 search_controller,
                 deterministic=False,
                 algo=algo,
@@ -90,23 +90,23 @@ def collect_rollout(
                 )
             else:
                 predator_actions, transitions, search_mode = step_result
-            continuing = sim.step_once(
+            continuing = run.step_once(
                 predator_actions=predator_actions,
-                raw_obs=raw_obs,
+                all_obs=all_obs,
             )
-            for agent_id in sim.predator_agent_ids():
-                body = sim.env.agent_bodies[agent_id]
+            for agent_id in run.env.alive_predator_ids():
+                body = run.env.agent_bodies[agent_id]
                 visited_cells.add((body.x, body.y))
             reward = predator_team_shaped_reward(
-                sim,
-                raw_obs,
-                sim.last_captured,
+                run,
+                all_obs,
+                run.last_captured,
                 visited_before,
                 search_mode=search_mode,
             )
             done = not continuing
-            episode_reward += reward * len(transitions)
-            episode_steps += 1
+            run_reward += reward * len(transitions)
+            run_steps += 1
 
             if algo == MAPPO:
                 buffer.add_step(joint_obs, team_value, reward, done, transitions)
@@ -122,10 +122,10 @@ def collect_rollout(
                         done,
                     )
 
-        episode_rewards.append(episode_reward)
-        episode_lengths.append(episode_steps)
+        run_rewards.append(run_reward)
+        run_lengths.append(run_steps)
 
-    return buffer, episode_rewards, episode_lengths
+    return buffer, run_rewards, run_lengths
 
 
 def append_csv_row(path, fieldnames, row):
@@ -201,8 +201,8 @@ def train(args):
 
     train_fields = [
         "update",
-        "mean_episode_reward",
-        "mean_episode_length",
+        "mean_run_reward",
+        "mean_run_length",
         "policy_loss",
         "value_loss",
         "entropy",
@@ -217,7 +217,7 @@ def train(args):
 
     for update in range(start_update, args.updates):
         policy.train()
-        buffer, episode_rewards, episode_lengths = collect_rollout(
+        buffer, run_rewards, run_lengths = collect_rollout(
             training_rng,
             policy,
             device,
@@ -234,8 +234,8 @@ def train(args):
             train_fields,
             {
                 "update": update + 1,
-                "mean_episode_reward": sum(episode_rewards) / max(len(episode_rewards), 1),
-                "mean_episode_length": sum(episode_lengths) / max(len(episode_lengths), 1),
+                "mean_run_reward": sum(run_rewards) / max(len(run_rewards), 1),
+                "mean_run_length": sum(run_lengths) / max(len(run_lengths), 1),
                 "policy_loss": metrics.get("policy_loss", 0.0),
                 "value_loss": metrics.get("value_loss", 0.0),
                 "entropy": metrics.get("entropy", 0.0),

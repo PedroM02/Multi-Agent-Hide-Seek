@@ -1,7 +1,7 @@
 from decision_making import DecisionMaking
 from perception import Perception
 import random
-import agent_utils as au
+import constants as co
 
 
 class Agent:
@@ -31,14 +31,12 @@ class Agent:
         """Refresh last_seen_enemy from active_enemies, which include visible enemies and communicated enemies"""
         
         # If decision mode is optimal, agents have full view of the environment and do not need to update their memory
-        if self.decision.mode == au.MODE_OPTIMAL:
+        if self.decision.mode == co.MODE_OPTIMAL:
             return
-        # Retrieve active enemies from observation    
-        active_enemies = obs.get("active_enemies", ())
-        if not active_enemies:
+        if not obs.get("active_enemies", ()):
             return
-        # Update last seen enemy memory to closest visible enemy from perception
-        closest_enemy_position = self.perception.update_last_seen_enemy(obs["agent_x"], obs["agent_y"], active_enemies, self.rng)
+        # Get closest enemy and update last seen enemy memory
+        closest_enemy_position = self.perception.update_last_seen_enemy(obs, self.rng)
         if closest_enemy_position is not None:
             self.last_seen_enemy = closest_enemy_position
 
@@ -60,9 +58,9 @@ class Agent:
         if self.last_seen_enemy is not None and self.last_seen_enemy in positions:
             self.last_seen_enemy = None
 
-    def prepare_observation(self, obs, shared_enemies, shared_allies=()):
-        """Prepare observation for this step (delegates to perception)."""
-        self.perception.prepare_observation(obs, shared_enemies, shared_allies)
+    def perceive(self, obs):
+        """Enrich observation for this step"""
+        self.perception.perceive(obs)
 
     def decide(self, obs):
         """Returns action intention considering roles, if enabled"""
@@ -71,18 +69,18 @@ class Agent:
         self.update_memory_from_obs(obs)
 
         # Update role if enabled
-        if self.decision.mode == au.MODE_ROLES:
+        if self.decision.mode == co.MODE_ROLES:
             prev_role = self.role
             # Derive new role and role target position
             self.role, self.role_target = self.decision.derive_role(obs)
             # If search is enabled and it's the agent's role, get the agent's search direction
             # Heading is chosen when entering search and again when there is a new visible ally, to ensure dispersion
             if self.decision.searcher_enabled:
-                if self.role == au.ROLE_SEARCHER:
+                if self.role == co.ROLE_SEARCHER:
                     # Get visible allies from observation
                     visible_ally_ids = {ally_id for ally_x, ally_y, ally_id in obs.get("visible_allies", ())}
                     # If it's the first time searching, calculate search direction
-                    if prev_role != au.ROLE_SEARCHER:
+                    if prev_role != co.ROLE_SEARCHER:
                         self.search_heading = (self.decision.init_search_heading(obs))
                     # If the visible allies contains a new ally, recalculate search direction
                     elif visible_ally_ids - self.search_seen_ally_ids:
@@ -118,14 +116,14 @@ def build_agents_for_env(env, rng, config):
         decision_seed = rng.randint(0, 10**10)
         perception_seed = rng.randint(0, 10**10)
         # Define predators' decision mode.Prey always flee, so they do not consider any decision modes
-        decision_mode = (config.mode if agent_body.team == au.TEAM_PREDATOR else au.MODE_CHASE)
+        decision_mode = (config.mode if agent_body.team == co.TEAM_PREDATOR else co.MODE_CHASE)
         # Create agent and add to list of agents
         agents.append(Agent(agent_id=agent_id,
                             team=agent_body.team,
                             perception=Perception(),
                             decision=DecisionMaking(rng=random.Random(decision_seed),
                                                     mode=decision_mode,
-                                                    searcher_enabled=(config.roles_searcher if agent_body.team == au.TEAM_PREDATOR else False)),
+                                                    searcher_enabled=(config.roles_searcher if agent_body.team == co.TEAM_PREDATOR else False)),
                             rng=random.Random(perception_seed)))
     
     return agents

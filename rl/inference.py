@@ -3,7 +3,7 @@
 import numpy as np
 import torch
 
-import agent_utils as au
+import constants as co
 from rl.algo import IPPO, MAPPO
 from rl.obs_encoding import (
     ACTION_TO_IDX,
@@ -19,35 +19,35 @@ from rl.team_search import (
 )
 
 
-def agents_by_id(sim):
-    return {agent.agent_id: agent for agent in sim.agents}
+def agents_by_id(run):
+    return {agent.agent_id: agent for agent in run.agents}
 
 
-def predator_slot_ids(sim):
+def predator_slot_ids(run):
     return sorted(
         body.agent_id
-        for body in sim.env.agent_bodies.values()
-        if body.team == au.TEAM_PREDATOR
+        for body in run.env.agent_bodies.values()
+        if body.team == co.TEAM_PREDATOR
     )
 
 
-def predator_action_mask(sim, agent_id, raw_obs):
+def predator_action_mask(run, agent_id, raw_obs):
     """Legal actions for a predator; stunned predators may only STAY."""
     mask = base_action_mask(raw_obs)
-    body = sim.env.agent_bodies[agent_id]
+    body = run.env.agent_bodies[agent_id]
     if (
-        sim.config.prey_defend == "stun"
-        and body.team == au.TEAM_PREDATOR
+        run.config.prey_defend == "stun"
+        and body.team == co.TEAM_PREDATOR
         and body.stun_remaining > 0
     ):
         stay_only = np.zeros_like(mask)
-        stay_only[ACTION_TO_IDX[au.STAY]] = True
+        stay_only[ACTION_TO_IDX[co.STAY]] = True
         return stay_only
     return mask
 
 
 def collect_predator_transitions(
-    sim,
+    run,
     policy,
     device,
     raw_obs,
@@ -57,8 +57,8 @@ def collect_predator_transitions(
     slot_ids=None,
 ):
     """Sample predator actions; searching agents use the heuristic (not trained)."""
-    agent_lookup = agents_by_id(sim)
-    predator_ids = list(sim.predator_agent_ids())
+    agent_lookup = agents_by_id(run)
+    predator_ids = run.env.alive_predator_ids()
     transitions = []
     predator_actions = {}
     team_value = None
@@ -80,7 +80,7 @@ def collect_predator_transitions(
         agent_in_search = {agent_id: False for agent_id in predator_ids}
 
     if algo == MAPPO:
-        slot_ids = slot_ids or predator_slot_ids(sim)
+        slot_ids = slot_ids or predator_slot_ids(run)
         joint_obs = build_joint_predator_obs(raw_obs, slot_ids, agent_lookup)
         joint_tensor = torch.tensor(
             joint_obs, dtype=torch.float32, device=device,
@@ -100,7 +100,7 @@ def collect_predator_transitions(
             continue
 
         obs_vec = encode_obs(raw, agent)
-        mask_vec = predator_action_mask(sim, agent_id, raw)
+        mask_vec = predator_action_mask(run, agent_id, raw)
         obs = torch.tensor(obs_vec, dtype=torch.float32, device=device).unsqueeze(0)
         mask = torch.tensor(mask_vec, dtype=torch.bool, device=device).unsqueeze(0)
 
@@ -137,7 +137,7 @@ def collect_predator_transitions(
 
 
 def select_predator_actions(
-    sim,
+    run,
     policy,
     device,
     search_controller,
@@ -145,10 +145,10 @@ def select_predator_actions(
     algo=IPPO,
 ):
     """Build obs for alive predators and return action strings."""
-    raw_obs = sim.build_step_observations()
-    slot_ids = predator_slot_ids(sim) if algo == MAPPO else None
+    raw_obs = run.build_step_observations()
+    slot_ids = predator_slot_ids(run) if algo == MAPPO else None
     result = collect_predator_transitions(
-        sim,
+        run,
         policy,
         device,
         raw_obs,
@@ -168,7 +168,7 @@ def make_rl_config(base=None, **overrides):
     from simulation import SimulationConfig
 
     config = SimulationConfig() if base is None else base
-    config.mode = au.MODE_RL
+    config.mode = co.MODE_RL
     config.comms = "both"
     for key, value in overrides.items():
         setattr(config, key, value)

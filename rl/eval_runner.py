@@ -1,13 +1,12 @@
-"""Shared evaluation helpers for RL episodes."""
+"""Shared evaluation helpers for RL runs."""
 
 import random
 
-import agent_utils as au
-from reward_attribution import predator_team_reward
+import constants as co
 from rl.algo import IPPO, MAPPO
 from rl.inference import collect_predator_transitions, make_rl_config, predator_slot_ids
 from rl.team_search import PredatorSearchController
-from simulation import BatchSummary, SimulationState, copy_config
+from simulation import BatchSummary, Run, copy_config
 
 
 def sample_num_prey(rng, curriculum_phase=None):
@@ -28,7 +27,7 @@ def curriculum_phase_for_update(update, curriculum_enabled):
     return 3
 
 
-def run_rl_episode(
+def execute_rl_run(
     config,
     rng,
     policy,
@@ -37,18 +36,17 @@ def run_rl_episode(
     algo=IPPO,
     use_search=False,
 ):
-    sim = SimulationState(config, rng)
-    total_reward = 0.0
-    slot_ids = predator_slot_ids(sim) if algo == MAPPO else None
+    run = Run(config, rng)
+    slot_ids = predator_slot_ids(run) if algo == MAPPO else None
     search_controller = PredatorSearchController() if use_search else None
 
-    while sim.outcome == au.OUTCOME_ONGOING:
-        raw_obs = sim.build_step_observations()
+    while run.outcome == co.OUTCOME_ONGOING:
+        all_obs = run.build_step_observations()
         step_result = collect_predator_transitions(
-            sim,
+            run,
             policy,
             device,
-            raw_obs,
+            all_obs,
             search_controller,
             deterministic=deterministic,
             algo=algo,
@@ -60,10 +58,9 @@ def run_rl_episode(
             )
         else:
             predator_actions, _transitions, _search_mode = step_result
-        sim.step_once(predator_actions=predator_actions, raw_obs=raw_obs)
-        total_reward += predator_team_reward(sim.last_captured)
+        run.step_once(predator_actions=predator_actions, all_obs=all_obs)
 
-    return sim.outcome, sim.step_index, total_reward
+    return run.outcome, run.step_index
 
 
 def run_rl_batch(
@@ -79,7 +76,7 @@ def run_rl_batch(
     for run_index in range(num_runs):
         run_config = copy_config(config, seed=config.seed + run_index)
         rng = random.Random(run_config.seed)
-        outcome, steps, _reward = run_rl_episode(
+        outcome, steps = execute_rl_run(
             run_config,
             rng,
             policy,
@@ -90,10 +87,10 @@ def run_rl_batch(
         )
         accumulator.runs += 1
         accumulator.total_steps += steps
-        if outcome == au.OUTCOME_PREDATORS_WIN:
+        if outcome == co.OUTCOME_PREDATORS_WIN:
             accumulator.predator_wins += 1
             accumulator.predator_win_steps += steps
-        elif outcome == au.OUTCOME_PREY_WIN:
+        elif outcome == co.OUTCOME_PREY_WIN:
             accumulator.prey_wins += 1
             accumulator.prey_win_steps += steps
     return accumulator

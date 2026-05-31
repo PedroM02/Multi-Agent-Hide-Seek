@@ -1,778 +1,601 @@
 import random
-
-import agent_utils as au
-from distances import _grid_neighbors, _in_grid_bounds, bfs_distance, chebyshev, manhattan
-
-
-# ---------------------------------------------------------------------------
-# Module-level helpers.
-# ---------------------------------------------------------------------------
-
-
-def _apply_action(x, y, action):
-    delta_x, delta_y = au.ACTION_DELTA[action]
-    return x + delta_x, y + delta_y
-
-
-def _iter_enemy_sightings(*sources):
-    """Yield ``(enemy_x, enemy_y, enemy_id)`` from direct or comms reports."""
-    for source in sources:
-        for item in source:
-            if len(item) == 4:
-                sender_id, enemy_x, enemy_y, enemy_id = item
-            else:
-                enemy_x, enemy_y, enemy_id = item
-            yield enemy_x, enemy_y, enemy_id
-
-
-# ---------------------------------------------------------------------------
-# Grid path steps for Level 6 optimal modes (uses distances.bfs_distance).
-# ---------------------------------------------------------------------------
-
-
-def _bfs_best_distance_greedy(
-    start,
-    goal,
-    width,
-    height,
-    wall_cells,
-    legal_actions,
-    rng,
-):
-    """Fallback when goal is unreachable: minimize BFS distance after one step."""
-    start_x, start_y = start
-    best = []
-    best_distance = None
-    for action in legal_actions:
-        delta_x, delta_y = au.ACTION_DELTA[action]
-        neighbor_x, neighbor_y = start_x + delta_x, start_y + delta_y
-        distance = bfs_distance(
-            (neighbor_x, neighbor_y), goal, width, height, wall_cells,
-        )
-        if distance is None:
-            continue
-        if best_distance is None or distance < best_distance:
-            best_distance = distance
-            best = [action]
-        elif distance == best_distance:
-            best.append(action)
-    if best:
-        return min(best, key=lambda a: rng.randint(0, 1000))
-    return rng.choice(legal_actions)
-
-
-def bfs_first_step(
-    start,
-    goal,
-    width,
-    height,
-    wall_cells,
-    legal_actions,
-    rng,
-):
-    """Pick a legal action that follows one step along a shortest BFS path."""
-    if not legal_actions:
-        return au.STAY
-    if start == goal:
-        return au.STAY if au.STAY in legal_actions else rng.choice(legal_actions)
-
-    start_x, start_y = start
-    queue = [start]
-    parent = {start: None}
-
-    while queue:
-        x, y = queue.pop(0)
-        if (x, y) == goal:
-            break
-        for neighbor_x, neighbor_y in _grid_neighbors(x, y):
-            if not _in_grid_bounds(neighbor_x, neighbor_y, width, height):
-                continue
-            if (neighbor_x, neighbor_y) in wall_cells:
-                continue
-            if (neighbor_x, neighbor_y) in parent:
-                continue
-            parent[(neighbor_x, neighbor_y)] = (x, y)
-            queue.append((neighbor_x, neighbor_y))
-    else:
-        return _bfs_best_distance_greedy(
-            start, goal, width, height, wall_cells, legal_actions, rng,
-        )
-
-    current = goal
-    while parent[current] is not None and parent[current] != start:
-        current = parent[current]
-    first_step_x, first_step_y = current
-    preferred = []
-    for action in legal_actions:
-        delta_x, delta_y = au.ACTION_DELTA[action]
-        if start_x + delta_x == first_step_x and start_y + delta_y == first_step_y:
-            preferred.append(action)
-    if preferred:
-        return min(preferred, key=lambda a: rng.randint(0, 1000))
-    return _bfs_best_distance_greedy(
-        start, goal, width, height, wall_cells, legal_actions, rng,
-    )
-
-
-def select_pack_prey_id(
-    predator_positions,
-    oracle_prey,
-    width,
-    height,
-    wall_cells,
-):
-    """Prey id minimizing sum of BFS distances from all predators."""
-    if not oracle_prey or not predator_positions:
-        return None
-
-    unreachable_penalty = width * height * len(predator_positions)
-    best_id = None
-    best_score = None
-
-    for prey_x, prey_y, prey_id in oracle_prey:
-        total = 0
-        for predator_position in predator_positions:
-            distance = bfs_distance(
-                predator_position, (prey_x, prey_y), width, height, wall_cells,
-            )
-            total += distance if distance is not None else unreachable_penalty
-        if best_score is None or total < best_score or (
-            total == best_score and (best_id is None or prey_id < best_id)
-        ):
-            best_score = total
-            best_id = prey_id
-    return best_id
-
-
-# ---------------------------------------------------------------------------
-# Per-agent action selection.
-# ---------------------------------------------------------------------------
+import constants as co
+from utils import apply_action, bfs_first_step, chebyshev, manhattan
 
 
 class DecisionMaking:
-    def __init__(self, rng, mode=au.MODE_CHASE, searcher_enabled=False):
+    '''Decision making module that chooses an action intention for the agent based on observation and reasoning mode.
+       Roles mode can have searcher role or not'''
+    def __init__(self, rng, mode=co.MODE_CHASE, searcher_enabled=False):
         self.rng = rng
         self.mode = mode
         self.searcher_enabled = searcher_enabled
 
-    def choose_action(self, obs, last_seen_enemy):
-        """Return (chosen_action, should_clear_memory).
 
-        should_clear_memory is True when the agent reached its last-seen
-        position without finding the enemy there — the caller drops the
-        stale memory instead of looping forever.
-        """
+############################################ General action functions #######################################################
+
+
+    def choose_action(self, obs, last_seen_enemy):
+        """Return the chosen action intention for the current step."""
+        
+        # If no legal actions are available, stay in place
         legal = list(obs["legal_actions"])
         if not legal:
-            return au.STAY, False
+            return co.STAY
 
-        if obs["team"] == au.TEAM_PREDATOR:
-            if self.mode == au.MODE_RL:
-                return au.STAY, False
-            if self.mode == au.MODE_RANDOM:
-                return self._random_move(legal), False
-            if self.mode == au.MODE_OPTIMAL:
-                return self._optimal(obs, legal), False
-            if self.mode == au.MODE_PACK:
-                return self._pack(obs, last_seen_enemy, legal)
-            if self.mode == au.MODE_ROLES:
-                return self._roles(obs, last_seen_enemy, legal)
-            return self._chase(obs, last_seen_enemy, legal)
-        return self._flee(obs, last_seen_enemy, legal)
+        # If the agent is a predator, choose an action intention based on the mode
+        if obs["team"] == co.TEAM_PREDATOR:
+            if self.mode == co.MODE_RL:
+                return co.STAY
+            if self.mode == co.MODE_RANDOM:
+                return self.rng.choice(legal)
+            if self.mode == co.MODE_ROLES:
+                return self.roles(obs, last_seen_enemy, legal)
+            if self.mode == co.MODE_OPTIMAL:
+                return self.optimal(obs, legal)
+            # If mode is neither of the above nor RL, use chase mode
+            return self.chase(obs, last_seen_enemy, legal)
+        # If the agent is a prey, use flee mode
+        return self.flee(obs, last_seen_enemy, legal)
 
-    def _random_move(self, legal):
-        """Level 1: uniform random over legal actions (ignores perception)."""
-        return self.rng.choice(legal)
+    def move_to(self, agent_x, agent_y, target_x, target_y, legal):
+        """Returns action intention that most reduces distance to the target position"""
+        # Initialize best distance and best actions
+        best_distance = None
+        best_actions = []
+        # Iterate over all legal actions and compute the distance to the target
+        for action in legal:
+            # Compute the next position after taking the action
+            next_x, next_y = apply_action(agent_x, agent_y, action)
+            # Compute the Manhattan distance to the target
+            distance = manhattan(next_x, next_y, target_x, target_y)
+            # If this action leads to a shorter distance than the best so far, update the best action and distance
+            if best_distance is None or distance < best_distance:
+                best_distance = distance
+                best_actions = [action]
+            # If this action leads to the same distance as the best so far, add to possible actions
+            elif distance == best_distance:
+                best_actions.append(action)
+        return self.rng.choice(best_actions)
 
-    def _optimal(self, obs, legal):
-        """Level 6: BFS toward the shared pack target injected by simulation."""
-        target = obs.get("pack_target")
-        if target is None:
-            return self._random_move(legal)
-        target_x, target_y = target
-        return self._optimal_bfs_step(obs, target_x, target_y, legal)
+############################################ Chase mode #######################################################
 
-    def _optimal_bfs_step(self, obs, target_x, target_y, legal):
-        return bfs_first_step(
-            (obs["agent_x"], obs["agent_y"]),
-            (target_x, target_y),
-            obs["grid_width"],
-            obs["grid_height"],
-            obs["wall_cells"],
-            legal,
-            self.rng,
-        )
-
-    def _chase(self, obs, last_seen_enemy, legal):
+    def chase(self, obs, last_seen_enemy, legal):
+        """Returns action intention that moves toward the last seen enemy, which could be the current 
+           closest active enemy or a previously seen enemy from memory"""
         active = obs["active_enemies"]
         agent_x, agent_y = obs["agent_x"], obs["agent_y"]
 
+        # If there is an active enemy, last_seen_enemy is the current closest active enemy
         if active:
             target = last_seen_enemy
             stale = False
+        # If there is no active enemy, last_seen_enemy is a previously seen enemy from memory and we chase that
         elif last_seen_enemy is not None:
             target = last_seen_enemy
             stale = True
+        # If there is nothing to chase, return a random legal action
         else:
-            return self.rng.choice(legal), False
+            return self.rng.choice(legal)
 
-        assert target is not None
+        # If the target's information is stale and the agent has reached the target, return a random legal action
         target_x, target_y = target
         if stale and agent_x == target_x and agent_y == target_y:
-            return self.rng.choice(legal), True
-        return self._navigate_to(agent_x, agent_y, target_x, target_y, legal), False
+            return self.rng.choice(legal)
+        # Return action that moves towards the target
+        return self.move_to(agent_x, agent_y, target_x, target_y, legal)
+
+############################################ Roles mode #######################################################
 
     def derive_role(self, obs):
-        """Local role derivation for `--mode roles` (no simulation assignment)."""
-        if obs["team"] == au.TEAM_PREY:
-            return au.ROLE_FLEE, None
-        return self._derive_predator_role(obs)
+        """Role derivation when roles mode is enabled. Prey have no specific roles. Predators
+           can be chaser, flanker, or searcher. Chaser if they are closest to a selected pack
+           prey. Flanker if they are not the closest but still within communication range. Searcher if
+           they know no prey.
+           
+           Returns the role and target position for the role (relevant for flanker)"""
 
-    def _derive_predator_role(self, obs):
-        prey_candidates = self._pack_prey_candidates(obs)
+        # Prey don't have specific roles
+        if obs["team"] == co.TEAM_PREY:
+            return co.ROLE_FLEE, None
+
+        # Retrieve known prey candidates
+        prey_candidates = self.pack_prey_candidates(obs)
+        # If searcher is enabled and there are no prey candidates, return searcher role
         if self.searcher_enabled and not prey_candidates:
-            return au.ROLE_SEARCHER, None
-
+            return co.ROLE_SEARCHER, None
+        # If there are no visible allies around, return chaser role
         if not obs.get("visible_allies", ()):
-            return au.ROLE_CHASER, None
-
-        peers = self._known_peers(obs, include_shared_allies=False)
-
-        peer_positions = [(x, y) for _, x, y in peers]
-        focus_prey = self._pick_pack_prey(peer_positions, prey_candidates)
+            return co.ROLE_CHASER, None
+        # Retrieve known peers and their positions, including the agent
+        peers = self.known_peers(obs)
+        peer_positions = [(x, y) for peer_id, x, y in peers]
+        # Pick the pack prey that minimizes the sum of Manhattan distances from pack peers
+        focus_prey = self.pick_pack_prey(peer_positions, prey_candidates)
+        # If no pack prey is found, return chaser role
         if focus_prey is None:
-            return au.ROLE_CHASER, None
+            return co.ROLE_CHASER, None
 
-        chaser_id = self._pick_chaser_id(peers, focus_prey)
-        my_id = obs["agent_id"]
-        if my_id == chaser_id:
-            return au.ROLE_CHASER, focus_prey
+        # Identify the closest peer to the pack prey
+        chaser_id = self.pick_chaser_id(peers, focus_prey)
+        # If the agent is the closest predator to prey, agent is the chaser
+        if obs["agent_id"] == chaser_id:
+            return co.ROLE_CHASER, focus_prey
 
-        if not self._knows_prey_at(obs, focus_prey):
-            return au.ROLE_CHASER, None
+        # If the agent does not know of the pack prey, return chaser role. Only agents that are close enough to
+        # the prey can know of it and thus are eligible to be a flanker (below)
+        if not self.knows_prey_at(obs, focus_prey):
+            return co.ROLE_CHASER, None
 
-        flank_target = self._my_flank_target(obs, peers, chaser_id, focus_prey)
+        # Identify if agent possesses conditions to be flanker and, if so, return its role along with flank target cell
+        # flank_target() handles both eligibility and cell assignment
+        flank_target = self.flank_target(obs, peers, chaser_id, focus_prey)
         if flank_target is None:
-            return au.ROLE_CHASER, None
-        return au.ROLE_FLANKER, flank_target
+            return co.ROLE_CHASER, None
+        return co.ROLE_FLANKER, flank_target
 
-    def _roles(self, obs, last_seen_enemy, legal):
+    def roles(self, obs, last_seen_enemy, legal):
+        '''Returns the action intention for the agent based on its role'''
+
+        # Get role and possibly target from observation
         role = obs.get("role")
         role_target = obs.get("role_target")
         agent_x, agent_y = obs["agent_x"], obs["agent_y"]
 
-        if role == au.ROLE_FLANKER:
-            return self._flank(obs, legal)
-        if role == au.ROLE_SEARCHER:
-            return self._search(obs, legal), False
-        if role == au.ROLE_CHASER and role_target is not None:
+        # Return appropriate action intention based on role
+        if role == co.ROLE_FLANKER:
+            return self.flank(obs, legal)
+        if role == co.ROLE_SEARCHER:
+            return self.search(obs, legal)
+        # If agent is a chaser within a flanking formation, move to focus prey (role_target)
+        if role == co.ROLE_CHASER and role_target is not None:
             target_x, target_y = role_target
-            return self._navigate_to(
-                agent_x, agent_y, target_x, target_y, legal,
-            ), False
-        return self._chase(obs, last_seen_enemy, legal)
+            return self.move_to(agent_x, agent_y, target_x, target_y, legal)
+        # If agent is just a chaser, chase the last seen enemy
+        return self.chase(obs, last_seen_enemy, legal)
 
-    def _pick_chaser_id(self, peers, focus_prey):
+    ################################### Chase and Flank #######################################################
+
+    def pick_chaser_id(self, peers, focus_prey):
+        '''Returns the closest predator in the pack to the selected prey'''
+        # Initialize best ID and distance
         focus_x, focus_y = focus_prey
         best_id = None
-        best_dist = None
-        for peer_id, px, py in peers:
-            distance = manhattan(px, py, focus_x, focus_y)
-            if best_dist is None or distance < best_dist or (
-                distance == best_dist and peer_id < best_id
-            ):
-                best_dist = distance
+        best_distance = None
+        # Iterate over all peers and compute the Manhattan distance to the focus prey
+        for peer_id, peer_x, peer_y in peers:
+            # Compute the Manhattan distance to the focus prey
+            distance = manhattan(peer_x, peer_y, focus_x, focus_y)
+            # If this peer is closer than the best so far, update the best ID and distance
+            # If this peer has the same distance as the best so far, keep the peer with smallest ID
+            if best_distance is None or distance < best_distance or (distance == best_distance and peer_id < best_id):
+                best_distance = distance
                 best_id = peer_id
         return best_id
 
-    def _knows_prey_at(self, obs, prey_pos):
-        px, py = prey_pos
-        for enemy_x, enemy_y, enemy_id in _iter_enemy_sightings(
-            obs.get("visible_enemies", ()),
-            obs.get("shared_enemies", ()),
-        ):
-            if (enemy_x, enemy_y) == (px, py):
+    def knows_prey_at(self, obs, prey_pos):
+        '''Returns True if the agent knows the prey at the given position either directly or through communication'''
+        prey_x, prey_y = prey_pos
+        # Iterate over all known enemies and check if any of them is at the given position
+        for enemy_x, enemy_y, enemy_id in obs.get("known_enemies", ()):
+            if (enemy_x, enemy_y) == (prey_x, prey_y):
                 return True
         return False
 
-    def _ally_can_see_prey_at(self, obs, ally_x, ally_y, prey_pos):
-        px, py = prey_pos
-        return chebyshev(ally_x, ally_y, px, py) <= obs["vision_radius"]
+    def ally_can_see_prey_at(self, obs, ally_x, ally_y, prey_pos):
+        '''Returns True if an ally is within vision range of the prey'''
+        prey_x, prey_y = prey_pos
+        return chebyshev(ally_x, ally_y, prey_x, prey_y) <= obs["vision_radius"]
 
-    def _peer_reported_prey_at(self, obs, peer_id, prey_pos):
-        px, py = prey_pos
+    def peer_reported_prey_at(self, obs, peer_id, prey_pos):
+        '''Returns True if a peer has reported the prey at the given position'''
+        prey_x, prey_y = prey_pos
+        # Iterate over communicated enemies and check if any of them is at the relevant position
+        # and was reported by the given peer
         for item in obs.get("shared_enemies", ()):
-            if len(item) != 4:
-                continue
-            sender_id, enemy_x, enemy_y, _ = item
-            if sender_id == peer_id and (enemy_x, enemy_y) == (px, py):
+            sender_id, enemy_x, enemy_y, enemy_id = item
+            if sender_id == peer_id and (enemy_x, enemy_y) == (prey_x, prey_y):
                 return True
         return False
 
-    def _peer_can_see_focus_prey(self, obs, peer_id, ally_x, ally_y, focus_prey):
-        return (
-            self._ally_can_see_prey_at(obs, ally_x, ally_y, focus_prey)
-            or self._peer_reported_prey_at(obs, peer_id, focus_prey)
-        )
+    def flanker_candidate_ids(self, obs, peers, chaser_id, focus_prey):
+        """Returns non-chaser peers which are eligible to flank.
 
-    def _flanker_candidate_ids(self, obs, peers, chaser_id, focus_prey):
-        """Non-chaser peers eligible to flank (can see focus prey).
+        Can be the agent itself if prey at focus is in visible enemies or comms reports. 
+        Can be any of the visible allies if they are within vision range to focus prey, or they reported it"""
 
-        Self: prey at focus in visible or attributed comms reports. Other
-        visible allies: Chebyshev range to focus prey, or they reported it.
-        Slot assignment stays id-based.
-        """
-        my_id = obs["agent_id"]
         candidate_ids = []
+
+        # Iterate over all peers and check if they check eligibility conditions to flank
         for peer_id, ally_x, ally_y in peers:
+            # If peer is already chaser, skip
             if peer_id == chaser_id:
                 continue
-            if peer_id == my_id:
-                if self._knows_prey_at(obs, focus_prey):
+            # If current peer is the agent, check if it knows of the prey
+            if peer_id == obs["agent_id"]:
+                if self.knows_prey_at(obs, focus_prey):
                     candidate_ids.append(peer_id)
-            elif self._peer_can_see_focus_prey(
-                obs, peer_id, ally_x, ally_y, focus_prey,
-            ):
+            # If the peer is a visible ally, check if they can see the prey or report it
+            elif self.ally_can_see_prey_at(obs, ally_x, ally_y, focus_prey) or self.peer_reported_prey_at(obs, peer_id, focus_prey):
                 candidate_ids.append(peer_id)
         return sorted(candidate_ids)
 
-    def _unit_step(self, dx, dy):
-        """Sign per axis for a non-zero direction (Manhattan step)."""
-        step_x = 0 if dx == 0 else (1 if dx > 0 else -1)
-        step_y = 0 if dy == 0 else (1 if dy > 0 else -1)
-        return step_x, step_y
 
-    def _flank_options(self, chaser_pos, focus_prey):
-        """Two cells one step perpendicular to the chaser→prey axis."""
+    def flank_options(self, chaser_pos, focus_prey):
+        """Returns the two adjacent cells to the prey that are perpendicular to the chaser's direction"""
         chaser_x, chaser_y = chaser_pos
         focus_x, focus_y = focus_prey
+        # Calculate the positional difference between the chaser and prey (their axis, chaser's direction vector)
         dx = focus_x - chaser_x
         dy = focus_y - chaser_y
+        # Failsafe: if chaser is on top of prey, return two adjacent cells
         if dx == 0 and dy == 0:
             return (focus_x + 1, focus_y), (focus_x - 1, focus_y)
-        perp_x, perp_y = self._unit_step(-dy, dx)
-        return (
-            (focus_x + perp_x, focus_y + perp_y),
-            (focus_x - perp_x, focus_y - perp_y),
-        )
 
-    def _my_flank_target(self, obs, peers, chaser_id, focus_prey):
-        chaser_pos = next(
-            (x, y) for peer_id, x, y in peers if peer_id == chaser_id
-        )
-        option1, option2 = self._flank_options(chaser_pos, focus_prey)
-        flanker_ids = self._flanker_candidate_ids(
-            obs, peers, chaser_id, focus_prey,
-        )
+        # Perpendicular to (dx, dy) direction on the grid means rotating to (-dy, dx)
+        rot_x = -dy
+        rot_y = dx
+        # Perpendicular one-step coordinate increments
+        # (if prey and chaser on the same x or y coordinate, the other coordinate needs no change,
+        # just go under/over or left/right of prey)
+        perp_x = 0 if rot_x == 0 else (1 if rot_x > 0 else -1)
+        perp_y = 0 if rot_y == 0 else (1 if rot_y > 0 else -1)
+        # Return the two prey adjacent cells that are one cell away, along the perpendicular direction
+        return ((focus_x + perp_x, focus_y + perp_y), (focus_x - perp_x, focus_y - perp_y))
+
+    def flank_target(self, obs, peers, chaser_id, focus_prey):
+        '''Returns the target cell for the agent to flank the prey, closest from options if not taken'''
+
+        chaser_pos = next((x, y) for peer_id, x, y in peers if peer_id == chaser_id)
+        # Get the two flank options (perpendicular adjacent cells to the prey)
+        option1, option2 = self.flank_options(chaser_pos, focus_prey)
+        # Check possible flankers and if agent is eligible to flank, return no target if not
+        flanker_ids = self.flanker_candidate_ids(obs, peers, chaser_id, focus_prey)
         if obs["agent_id"] not in flanker_ids:
             return None
 
+        # Assign the two flank options to the flankers, closest from options if not taken
         used_slots = []
         assignments = {}
+        # Iterate over flanker candidates, get their position and compute closest flank option
         for flanker_id in flanker_ids:
-            flanker_pos = next(
-                (x, y) for peer_id, x, y in peers if peer_id == flanker_id
-            )
-            distance1 = manhattan(
-                flanker_pos[0], flanker_pos[1], option1[0], option1[1],
-            )
-            distance2 = manhattan(
-                flanker_pos[0], flanker_pos[1], option2[0], option2[1],
-            )
+            flanker_pos = next((x, y) for peer_id, x, y in peers if peer_id == flanker_id)
+            distance1 = manhattan(flanker_pos[0], flanker_pos[1], option1[0], option1[1])
+            distance2 = manhattan(flanker_pos[0], flanker_pos[1], option2[0], option2[1])
+            # If both options are not taken, choose the closest
             if option1 not in used_slots and option2 not in used_slots:
                 chosen = option1 if distance1 <= distance2 else option2
+            # If any option is taken, choose the other
             elif option1 in used_slots:
                 chosen = option2
             elif option2 in used_slots:
                 chosen = option1
+            # Failsafe: for the scenario where both options are taken but there are more than two flankers
             else:
                 chosen = option1 if distance1 <= distance2 else option2
+            # Assign the chosen option to the flanker and add to used slots
             used_slots.append(chosen)
             assignments[flanker_id] = chosen
+        # Return agent's assigned target
         return assignments.get(obs["agent_id"])
 
-    def _pack(self, obs, last_seen_enemy, legal):
-        """Level 4: local pack reasoning — no simulation-assigned targets.
-
-        A pack exists when this predator sees at least one ally, or has
-        received ally positions via two-pass pack comms. Prey candidates
-        are the union of own sightings and teammate reports
-        (``shared_enemies``), not ``active_enemies`` alone. Peer positions
-        include self, ``visible_allies``, and ``shared_allies`` (relay).
-        """
-        visible_allies = obs.get("visible_allies", ())
-        shared_allies = obs.get("shared_allies", ())
-        if not visible_allies and not shared_allies:
-            return self._chase(obs, last_seen_enemy, legal)
-
-        agent_x, agent_y = obs["agent_x"], obs["agent_y"]
-        peer_positions = self._known_peer_positions(
-            obs, include_shared_allies=True,
-        )
-
-        prey_candidates = self._pack_prey_candidates(obs)
-        target = self._pick_pack_prey(peer_positions, prey_candidates)
-        if target is not None:
-            target_x, target_y = target
-            return self._navigate_to(
-                agent_x, agent_y, target_x, target_y, legal,
-            ), False
-
-        return self._chase(obs, last_seen_enemy, legal)
-
-    def _known_peers(self, obs, include_shared_allies=False):
-        """(peer_id, x, y) for self and known allies, sorted by id."""
+    def known_peers(self, obs):
+        """Return (peer_id, x, y) for the agent itself and visible allies, sorted by id"""
+        
+        # Initialize peers list with the agent itself and the IDs seen for deduplication
         peers = [(obs["agent_id"], obs["agent_x"], obs["agent_y"])]
         seen_ids = {obs["agent_id"]}
-        sources = [obs.get("visible_allies", ())]
-        if include_shared_allies:
-            sources.append(obs.get("shared_allies", ()))
-        for source in sources:
-            for ally_x, ally_y, ally_id in source:
-                if ally_id in seen_ids:
-                    continue
-                seen_ids.add(ally_id)
-                peers.append((ally_id, ally_x, ally_y))
-        peers.sort(key=lambda peer: peer[0])
+        # Iterate over visible allies and add to peers if not already seen
+        for ally_x, ally_y, ally_id in obs.get("visible_allies", ()):
+            if ally_id in seen_ids:
+                continue
+            seen_ids.add(ally_id)
+            peers.append((ally_id, ally_x, ally_y))
+        # Sort peers by ID (sorts with first element of tuple first)
+        peers.sort()
         return peers
 
-    def _known_peer_positions(self, obs, include_shared_allies=False):
-        return [
-            (x, y) for _, x, y in self._known_peers(
-                obs, include_shared_allies=include_shared_allies,
-            )
-        ]
+    def pack_prey_candidates(self, obs):
+        """Known prey, one entry per ID: direct sightings have priority over comm reports"""
 
-    def _pack_prey_candidates(self, obs):
-        """Own direct prey plus prey reported by visible allies via comms."""
         seen_ids = set()
         candidates = []
-        for enemy_x, enemy_y, enemy_id in _iter_enemy_sightings(
-            obs.get("visible_enemies", ()),
-            obs.get("shared_enemies", ()),
-        ):
+        # Iterate over visible prey and add to candidates if not already seen
+        for enemy_x, enemy_y, enemy_id in obs.get("visible_enemies", ()):
+            # Store visible prey IDs and positions
+            seen_ids.add(enemy_id)
+            candidates.append((enemy_x, enemy_y, enemy_id))
+        # Iterate over prey communicated to agent
+        for prey in obs.get("shared_enemies", ()):
+            sender_id, enemy_x, enemy_y, enemy_id = prey
+            # If there is direct information about prey, skip comm report
             if enemy_id in seen_ids:
                 continue
             seen_ids.add(enemy_id)
             candidates.append((enemy_x, enemy_y, enemy_id))
-        candidates.sort(key=lambda t: (t[2], t[0], t[1]))
         return candidates
 
-    def _pick_pack_prey(self, peer_positions, prey_candidates):
-        """Prey minimizing sum of Manhattan distances from pack peers."""
+    def pick_pack_prey(self, peer_positions, prey_candidates):
+        """Returns prey that minimizes the sum of Manhattan distances from pack peers"""
+        
+        # Failsafe: if there is no prey candidates, return no prey
         if not prey_candidates:
             return None
-
+        # Initialize best target, distance, and ID
         best_target = None
         best_score = None
         best_id = None
+        # Iterate over all prey candidates and compute the sum of Manhattan distances to pack peers
         for prey_x, prey_y, prey_id in prey_candidates:
-            total = sum(
-                manhattan(px, py, prey_x, prey_y)
-                for px, py in peer_positions
-            )
-            if best_score is None or total < best_score or (
-                total == best_score and prey_id < best_id
-            ):
+            total = sum(manhattan(peer_x, peer_y, prey_x, prey_y) for peer_x, peer_y in peer_positions)
+            # If this prey has a smaller total distance than the best so far, update the best target, distance, and ID
+            # If this prey has the same total distance, keep the prey with smallest ID
+            if best_score is None or total < best_score or (total == best_score and prey_id < best_id):
                 best_score = total
                 best_target = (prey_x, prey_y)
                 best_id = prey_id
         return best_target
 
-    def _flank(self, obs, legal):
+    def flank(self, obs, legal):
+        '''Returns the action intention for the agent to flank the prey'''
+        
+        # Get role target and agent position
         role_target = obs.get("role_target")
         agent_x, agent_y = obs["agent_x"], obs["agent_y"]
-
+        # If no role target, just chase the last seen enemy
         if role_target is None:
-            return self._chase(obs, None, legal)
-
+            return self.chase(obs, None, legal)
+        # If we reached the flank position, stay and wait
         target_x, target_y = role_target
-        # if we reached the flank position, stay put and wait
         if agent_x == target_x and agent_y == target_y:
-            return au.STAY, False
+            return co.STAY
+        # Otherwise, move to the flank target position
+        return self.move_to(agent_x, agent_y, target_x, target_y, legal)
 
-        return self._navigate_to(agent_x, agent_y, target_x, target_y, legal), False
+
+    ################################### Search ################################################################
 
     def init_search_heading(self, obs):
-        """Pick a cardinal direction to persist while searching.
+        """Pick a heading direction to persist while searching. Agent will keep moving in this
+           direction until a new visible ally appears or prey is known.
+           Uses the sum of vectors away from each visible ally to get best direction. 
+           With no visible allies, picks a deterministic direction"""
 
-        Uses the sum of vectors away from each visible ally. With no
-        allies, picks a deterministic cardinal from agent id.
-        """
         agent_x, agent_y = obs["agent_x"], obs["agent_y"]
         visible_allies = obs.get("visible_allies", ())
+        # If there are visible allies, iterate over them and compute the sum of vectors away from each visible ally
         if visible_allies:
-            repel_x = 0
-            repel_y = 0
-            for ally_x, ally_y, _ in visible_allies:
-                repel_x += agent_x - ally_x
-                repel_y += agent_y - ally_y
-            if repel_x == 0 and repel_y == 0:
-                repel_x = 1 if obs["agent_id"] % 2 == 0 else -1
-                repel_y = 1 if obs["agent_id"] % 3 == 0 else -1
-            return self._heading_from_vector(
-                repel_x, repel_y, obs["agent_id"],
-            )
-        cardinals = (au.UP, au.DOWN, au.LEFT, au.RIGHT)
-        return cardinals[obs["agent_id"] % len(cardinals)]
+            x_away = 0
+            y_away = 0
+            for ally_x, ally_y, ally_id in visible_allies:
+                x_away += agent_x - ally_x
+                y_away += agent_y - ally_y
+            # If the sum of vectors is zero (such as when surrounded by allies in all directions), pick a deterministic direction
+            if x_away == 0 and y_away == 0:
+                x_away = 1 if obs["agent_id"] % 2 == 0 else -1
+                y_away = 1 if obs["agent_id"] % 3 == 0 else -1
+            # Get best matching direction from the sum of vectors
+            return self.heading_from_vector(x_away, y_away, obs["agent_id"])
+        # If there are no visible allies, pick a deterministic direction
+        directions = (co.UP, co.DOWN, co.LEFT, co.RIGHT)
+        return directions[obs["agent_id"] % len(directions)]
 
-    def _heading_from_vector(self, vector_x, vector_y, agent_id):
-        """Map a repulsion vector to the best-matching cardinal action."""
+    def heading_from_vector(self, vector_x, vector_y, agent_id):
+        """Computes the best-matching action from a direction vector"""
+
         candidates = []
-        for action in (au.UP, au.DOWN, au.LEFT, au.RIGHT):
-            delta_x, delta_y = au.ACTION_DELTA[action]
+        # Iterate over all possible actions and compute an alignment score
+        for action in (co.UP, co.DOWN, co.LEFT, co.RIGHT):
+            delta_x, delta_y = co.ACTION_DELTA[action]
+            # Failsafe: if the action is STAY, skip as it's not a valid direction
             if delta_x == 0 and delta_y == 0:
                 continue
+            # Compute alignment score. If <= 0, then action is either perpendicular or against the direction vector and we discard it
             alignment = delta_x * vector_x + delta_y * vector_y
             if alignment <= 0:
                 continue
             candidates.append((alignment, action))
+        # If no action is good enough, pick a deterministic action
         if not candidates:
-            cardinals = (au.UP, au.DOWN, au.LEFT, au.RIGHT)
+            cardinals = (co.UP, co.DOWN, co.LEFT, co.RIGHT)
             return cardinals[agent_id % len(cardinals)]
+        # Sort candidates by alignment score and then by action
         candidates.sort(key=lambda item: (-item[0], item[1]))
+        # Get best aligned action
         best_alignment = candidates[0][0]
-        tied = [
-            action for alignment, action in candidates
-            if alignment == best_alignment
-        ]
+        # Check if there are multiple actions with the same best alignment score
+        tied = [action for alignment, action in candidates if alignment == best_alignment]
+        # If there are multiple actions with the same best alignment score, pick one in alphabetical order
         return min(tied)
 
-    def _search(self, obs, legal):
-        """SEARCHER: keep moving along a persisted heading.
-
-        The heading is chosen when entering search, when a new visible
-        ally appears, or after prey is lost (re-entering search). It is
-        then reused until the next such event or prey is known.
-        """
+    def search(self, obs, legal):
+        """Returns the action intention for the agent to search for prey.
+           Means returning the action that is best aligned with the search direction,
+           especially when the search direction's best action is not legal"""
+        
+        # If no heading exists, pick a random legal move
         heading = obs.get("search_heading")
         if heading is None:
-            cardinals = [action for action in legal if action != au.STAY]
-            return self.rng.choice(cardinals) if cardinals else au.STAY
+            directions = [action for action in legal if action != co.STAY]
+            return self.rng.choice(directions) if directions else co.STAY
 
+        # If the heading is legal, return it
         if heading in legal:
             return heading
+        # Otherwise, compute the second best aligned action (the first one is the heading itself)
+        return self.best_aligned_action(legal, heading)
 
-        return self._best_aligned_action(legal, heading)
-
-    def _best_aligned_action(self, legal, heading):
-        heading_delta = au.ACTION_DELTA[heading]
+    def best_aligned_action(self, legal, heading):
+        '''Computes the best aligned legal action from a heading, to be used when
+           the heading's best action is not legal'''
+        
+        # Get the heading vector coordinates
+        heading_x, heading_y = co.ACTION_DELTA[heading]
         best = None
         best_score = None
+        # Iterate over all legal actions and compute the alignment score with the heading vector
         for action in legal:
-            if action == au.STAY:
+            # Failsafe: if the action is STAY, skip as it's not a valid direction
+            if action == co.STAY:
                 continue
-            delta_x, delta_y = au.ACTION_DELTA[action]
-            score = (
-                delta_x * heading_delta[0] + delta_y * heading_delta[1],
-                self.rng.randint(0, 1000),
-            )
+            # Get the candidate action's direction vector
+            delta_x, delta_y = co.ACTION_DELTA[action]
+            # Compute the alignment score
+            score = delta_x * heading_x + delta_y * heading_y
+            # If this action has a better alignment score than the best so far, update the best action and score
             if best_score is None or score > best_score:
                 best_score = score
                 best = action
+        # If a best action was found, return it
         if best is not None:
             return best
-        return au.STAY if au.STAY in legal else self.rng.choice(legal)
+        # If no best action was found, stay if possible, otherwise pick a random legal action
+        return co.STAY if co.STAY in legal else self.rng.choice(legal)
 
-    def _flee(self, obs, last_seen_enemy, legal):
+############################################ Optimal mode #######################################################
+
+    def optimal(self, obs, legal):
+        """Returns action intention that moves toward pack prey in the shortest path possible"""
+        
+        # Get pack target from observation
+        target = obs.get("pack_target")
+        # Failsafe: if no pack target is found, return a random legal action
+        if target is None:
+            return self.rng.choice(legal)
+        # Return optimal action intention towards pack target
+        target_x, target_y = target
+        return bfs_first_step((obs["agent_x"], obs["agent_y"]), (target_x, target_y), obs["grid_width"], obs["grid_height"], obs["wall_cells"], legal, self.rng)
+
+
+############################################ Flee mode (prey) #######################################################
+
+
+    def flee(self, obs, last_seen_enemy, legal):
+        '''Returns the action intention for the agent to flee from predators.
+           Chooses to avoid fleeing into cells currently occupied by active enemies. If
+           no active enemies are present, it will wander around the map with a bias towards staying
+           close to visible allies. When possible, actions that keep prey close to visible allies are preferred.
+           This helps in stunning predators'''
+        
+        # Get the active enemies and visible allies
         active = obs["active_enemies"]
         visible_allies = obs.get("visible_allies", ())
         agent_x, agent_y = obs["agent_x"], obs["agent_y"]
 
+        # If there is an active enemy, last_seen_enemy is the current closest active enemy
         if active:
             target = last_seen_enemy
             stale = False
+        # If there is no active enemy, last_seen_enemy is a previously seen enemy from memory and the agent flees from them
         elif last_seen_enemy is not None:
             target = last_seen_enemy
             stale = True
+        # If there is no active enemy nor memory to flee from, wander around the map with a bias towards staying
+        # close to visible allies
         else:
-            # No active threat and no memory. Wander, but bias toward
-            # visible allies so prey preemptively pair up before any
-            # threat appears (this is what makes the cooperative
-            # knockout mechanic reachable in practice).
-            return self._wander_with_cohesion(
-                agent_x, agent_y, legal, visible_allies
-            ), False
+            return self.wander_with_cohesion(agent_x, agent_y, legal, visible_allies)
 
-        assert target is not None
+        # If prey end up on the last seen enemy's position, it means predator is no longer there and prey can wander map
         target_x, target_y = target
         if stale and agent_x == target_x and agent_y == target_y:
-            # Reached the stale memory cell without finding the enemy;
-            # drop the memory and wander (still cohesion-biased).
-            return self._wander_with_cohesion(
-                agent_x, agent_y, legal, visible_allies
-            ), True
+            return self.wander_with_cohesion(agent_x, agent_y, legal, visible_allies)
 
-        # Current distances to all *non-primary* threats. The "safe"
-        # check below only fires on these — only the primary target
-        # governs the actual flee direction.
+        # Compute current distances to all non-primary enemies
         current_other_distances = {}
+        # Iterate over all active enemies, skip primary enemy, and compute distance to each enemy
         for enemy_x, enemy_y, enemy_id in active:
             if enemy_x == target_x and enemy_y == target_y:
                 continue
-            current_other_distances[enemy_id] = manhattan(
-                agent_x, agent_y, enemy_x, enemy_y,
-            )
+            current_other_distances[enemy_id] = manhattan(agent_x, agent_y, enemy_x, enemy_y)
 
-        # Split STAY out of the legal set before computing the
-        # "safe" subset. STAY trivially never closes distance to anyone
-        # (zero delta), so treating it as just another safe action lets
-        # the prey freeze whenever every real cardinal looks unsafe —
-        # the primary predator then walks in for free. We treat STAY
-        # explicitly below instead.
-        cardinals = [a for a in legal if a != au.STAY]
+        # Get all legal actions except STAY
+        directions = [action for action in legal if action != co.STAY]
+        # Get all cells currently occupied by active enemies and filter directions that would lead to them
+        enemy_cells = {(enemy_x, enemy_y) for enemy_x, enemy_y, enemy_id in active}
+        directions = [action for action in directions if apply_action(agent_x, agent_y, action) not in enemy_cells]
 
-        # Suicide guard: drop any cardinal whose target cell is
-        # currently occupied by a known active enemy. `legal_actions`
-        # only checks bounds and walls, so a prey adjacent to a
-        # predator can otherwise have a move like DOWN→(predator cell)
-        # in its candidate set; the `safe_cardinals` filter happily
-        # accepts it (moves further from all *other* predators) and
-        # the scorer then prefers it to STAY on Manhattan-to-primary,
-        # producing a step-into-capture. The agent already sees the
-        # active enemies' positions in `obs`, so this guard uses no
-        # new information channel.
-        active_cells = {
-            (enemy_x, enemy_y) for enemy_x, enemy_y, _ in active
-        }
-        cardinals = [
-            action for action in cardinals
-            if _apply_action(agent_x, agent_y, action) not in active_cells
-        ]
-
-        # No ally-stack guard here. A move that lands on a teammate's
-        # current cell ("stacking") is *not* pruned: when the
-        # teammate is moving away this step, the action resolver
-        # cleanly cascades and the prey follows into the vacated
-        # cell — that's the "cascade-follow" path which is sometimes
-        # the only safe escape (e.g. cornered prey with the only
-        # safe cardinal pointing through a fleeing ally). The
-        # cohesion term in `score_prey` below uses |d_a - 1| (not
-        # d_a - 1), so d_a = 0 (stack) ties d_a = 2 (one cell away)
-        # at score 1 instead of being uniquely rewarded — the
-        # scorer no longer prefers stacking purely for its own
-        # sake. When the teammate actually stays put the resolver
-        # blocks the stack and forces STAY for this step (one
-        # wasted step), which is strictly cheaper than the
-        # alternative (refusing to stack and walking into a
-        # predator instead).
-
-        safe_cardinals = []
-        for action in cardinals:
-            neighbor_x, neighbor_y = _apply_action(agent_x, agent_y, action)
+        # Check if actions move towards any secondary enemy and avoid those
+        safe_directions = []
+        for action in directions:
+            # Get the next position after taking the action
+            next_x, next_y = apply_action(agent_x, agent_y, action)
             gets_closer_to_other = False
+            # Iterate over all active secondary enemies and check if the action moves towards them
             for enemy_x, enemy_y, enemy_id in active:
                 if enemy_id not in current_other_distances:
                     continue
-                if manhattan(neighbor_x, neighbor_y, enemy_x, enemy_y) < current_other_distances[enemy_id]:
+                # Check if the action moves towards the enemy (next distance is less than current distance)
+                if manhattan(next_x, next_y, enemy_x, enemy_y) < current_other_distances[enemy_id]:
                     gets_closer_to_other = True
                     break
+            # If the action does not move towards any secondary enemy, add it to the safe directions
             if not gets_closer_to_other:
-                safe_cardinals.append(action)
+                safe_directions.append(action)
 
-        if safe_cardinals:
-            # At least one real cardinal doesn't close on any
-            # secondary threat. STAY is trivially safe; include it so
-            # the scoring can still pick it when no cardinal beats it
-            # (e.g. cornered prey with a single diagonal predator).
-            candidate_actions = safe_cardinals + (
-                [au.STAY] if au.STAY in legal else []
-            )
-        elif cardinals:
-            # Every cardinal closes on at least one secondary threat.
-            # Rather than freezing on STAY and letting the primary
-            # (closest) predator walk in, accept the secondary closure
-            # and pick the cardinal that most increases distance to
-            # the primary.
-            candidate_actions = cardinals
+        # If there are safe directions, add STAY if it's legal
+        if safe_directions:
+            candidate_actions = safe_directions + ([co.STAY] if co.STAY in legal else [])
+        # If there are no safe directions, keep legal directions. If every action closes in on a secondary
+        # enemy, rather than simply staying, pick the direction that moves away from the primary enemy
+        elif directions:
+            candidate_actions = directions
+        # If there are no safe directions nor legal directions, stay if possible
         else:
-            # No legal cardinals remain after the suicide guard
-            # (every cardinal would step onto an active enemy, or
-            # there were no cardinals to begin with). Default to
-            # STAY — `legal` may still contain pruned cardinals, and
-            # we don't want the scorer to pick one of them after we
-            # just decided they're bad.
-            candidate_actions = [au.STAY] if au.STAY in legal else list(legal)
+            candidate_actions = [co.STAY] if co.STAY in legal else list(legal)
 
+        # Definition of the score for the candidate actions
         def score_prey(action):
-            neighbor_x, neighbor_y = _apply_action(agent_x, agent_y, action)
-            primary_distance = manhattan(neighbor_x, neighbor_y, target_x, target_y)
-            # Cohesion term: prefer moves that keep the prey within
-            # Chebyshev-1 of at least one visible teammate. d_a = 1
-            # is the sweet spot for the cooperative-knockout mechanic
-            # (two adjacent prey can stun a predator that is
-            # Chebyshev-1 of both). Using |d_a - 1| (not d_a - 1)
-            # means d_a = 0 (stacking onto an ally cell) is no longer
-            # the unique optimum — it ties d_a = 2 at score 1. The
-            # scorer therefore doesn't prefer stack moves for their
-            # own sake; when one is picked it's because the primary-
-            # distance key (the first lex key) already strictly
-            # favoured it, in which case the action resolver will
-            # cascade-follow the ally if it moves, or force a STAY
-            # if it doesn't — both acceptable. With no visible ally
-            # the term is neutral, preserving solo-prey behaviour.
+            '''Return the score for candidate actions. Contains two terms: the distance to the 
+               primary enemy and the cohesion term. Prey will prefer actions that move away from 
+               primary enemy, and will choose actions that stay close to visible allies when
+               primary distance is tied'''
+            # Get the next position after taking the action
+            next_x, next_y = apply_action(agent_x, agent_y, action)
+            # Calculate distance to primary enemy
+            primary_distance = manhattan(next_x, next_y, target_x, target_y)
+            # Calculate cohesion term, where prey prefer actions that keep them within radius 1 of a visible ally
             if visible_allies:
-                ally_distance = min(
-                    chebyshev(neighbor_x, neighbor_y, ally_x, ally_y)
-                    for (ally_x, ally_y, _) in visible_allies
-                )
+                # Get minimum Chebyshev distance to any visible ally
+                ally_distance = min(chebyshev(next_x, next_y, ally_x, ally_y) for (ally_x, ally_y, ally_id) in visible_allies)
+                # Compute cohesion term
                 ally_term = abs(ally_distance - 1)
             else:
                 ally_term = 0
+            # Return the score, where higher distance is preferred, and lower ally term is preferred
             return (-primary_distance, ally_term, self.rng.randint(0, 1000))
 
-        return min(candidate_actions, key=score_prey), False
+        # Return the action with the minimum score (moves furthest from primary enemy, and closest to allies)
+        return min(candidate_actions, key=score_prey)
 
-    def _wander_with_cohesion(
-        self,
-        agent_x,
-        agent_y,
-        legal,
-        visible_allies,
-    ):
-        """Cohesion-biased wander.
+    def wander_with_cohesion(self, agent_x, agent_y, legal, visible_allies):
+        """Returns the action intention for the agent to wander around the map with a bias towards staying
+           close to visible allies"""
 
-        With no visible ally this is just a uniform random pick over
-        `legal` — same as the prior behaviour. With at least one
-        visible ally we apply the same stack guard as the flee path
-        and pick the move minimising Chebyshev distance to the
-        nearest ally (target d_a = 1), with random jitter as the
-        tiebreaker. STAY is always considered, so a prey that is
-        already adjacent to an ally happily holds the formation.
-        """
+        # If there are no visible allies, return a random legal action
         if not visible_allies:
             return self.rng.choice(legal)
 
-        cardinals = [a for a in legal if a != au.STAY]
-        ally_cells = {
-            (ally_x, ally_y) for ally_x, ally_y, _ in visible_allies
-        }
-        cardinals = [
-            action for action in cardinals
-            if _apply_action(agent_x, agent_y, action) not in ally_cells
-        ]
-        candidates = cardinals + (
-            [au.STAY] if au.STAY in legal else []
-        )
+        # Get all legal actions except stay and filter directions that would lead to allies
+        directions = [action for action in legal if action != co.STAY]
+        ally_positions = {(ally_x, ally_y) for ally_x, ally_y, ally_id in visible_allies}
+        directions = [action for action in directions if apply_action(agent_x, agent_y, action) not in ally_positions]
+        # Bring back stay if it's legal
+        candidates = directions + ([co.STAY] if co.STAY in legal else [])
+        # If no actions do not lead to allies, return all legal actions
         if not candidates:
             candidates = list(legal)
 
         def score(action):
-            neighbor_x, neighbor_y = _apply_action(agent_x, agent_y, action)
-            ally_distance = min(
-                chebyshev(neighbor_x, neighbor_y, ally_x, ally_y)
-                for (ally_x, ally_y, _) in visible_allies
-            )
-            return (abs(ally_distance - 1), self.rng.randint(0, 1000))
+            '''Returns the cohesion score for a candidate action.
+               The score is the minimum Chebyshev distance to any visible ally. The lower the score,
+               the better the action is'''
 
+            # Get next position after taking the action and the minimum Chebyshev distance to any visible ally from that position
+            next_x, next_y = apply_action(agent_x, agent_y, action)
+            ally_distance = min(chebyshev(next_x, next_y, ally_x, ally_y) for (ally_x, ally_y, ally_id) in visible_allies)
+            # Return the score, where lower distance is preferred
+            return (abs(ally_distance - 1), self.rng.randint(0, 1000))
+        # Return the action with the minimum score (moves closest to allies)
         return min(candidates, key=score)
 
-    def _navigate_to(self, agent_x, agent_y, target_x, target_y, legal):
-        def score(action):
-            neighbor_x, neighbor_y = _apply_action(agent_x, agent_y, action)
-            return (
-                abs(neighbor_x - target_x) + abs(neighbor_y - target_y),
-                self.rng.randint(0, 1000),
-            )
 
-        return min(legal, key=score)

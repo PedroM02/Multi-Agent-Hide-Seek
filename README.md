@@ -88,12 +88,9 @@ python -m rl.train --checkpoint checkpoints/ippo/best_eval.pt \
 ### Grid
 
 A rectangle of `--width` x `--height` cells. Cells are either empty or
-walls (impassable, immutable). Walls come from two sources combined
-into the same set:
-
-- `--walls N --wall-size K` auto-generates `N` straight wall segments of
-  length `K`. The generator never blocks a full row or column.
-- Programmatic `SimulationConfig.walls` for tests.
+walls (impassable, immutable). Use `--walls N --wall-size K` to
+auto-generate `N` straight wall segments of length `K`. The generator
+never blocks a full row or column.
 
 ### Agents and movement
 
@@ -127,10 +124,10 @@ that square the world is dark.
 
 Two distance metrics show up in the codebase:
 
-- **Chebyshev** (`distances.chebyshev`) — used only by vision (an L_inf
+- **Chebyshev** (`utils.chebyshev`) — used only by vision (an L_inf
   square is the right shape for "everything within k of me on a grid
   with 8-neighbour visibility, even though we only move on 4").
-- **Manhattan** (`distances.manhattan`) — used for everything tactical:
+- **Manhattan** (`utils.manhattan`) — used for everything tactical:
   chase scoring, flee scoring. With pure 4-cardinal movement the
   predator's true step-cost to prey is exactly Manhattan, so Chebyshev
   would be over-permissive (e.g. a diagonal enemy at Chebyshev 1 is at
@@ -207,7 +204,7 @@ differ only in what happens to a defeated predator:
 
 ### Pipeline ordering
 
-`SimulationState.step_once` runs the knockout system between agent
+`Run.step_once` runs the knockout system between agent
 decisions and action resolution:
 
 1. Phase 1–3: observations → comms → role assignment → `decide`,
@@ -218,7 +215,7 @@ decisions and action resolution:
 2. **Phase 4a** (only when `prey_defend == "stun"`): every predator
    with `stun_remaining > 0` has its intention overridden to STAY.
 3. **Phase 4b** (only when `prey_defend` is set):
-   `SimulationState._resolve_knockouts(intentions, mode)` builds
+   `Run._resolve_knockouts(intentions, mode)` builds
    groups, picks defeatable predators per the rules above, applies
    the mode-specific effect (`stun_remaining = stun_duration` or
    `alive = False`), and overrides sandwicher prey to STAY.
@@ -277,8 +274,7 @@ Prey behavior is unchanged across levels (flee, optional stun/kill).
 | 2 | `chase` | off | none | Greedy Manhattan pursuit (`DecisionMaking._chase`) |
 | 3 | `chase` | `predators` / `both` | none | Same chase as Level 2; teammate enemy reports augment perception |
 | 4 | `roles` | optional | enabled | Per-agent chaser/flanker/searcher derivation (`derive_role`); single-hop comms |
-| 5 | `pack` | `predators` / `both` **required** | none | Per-agent pack reasoning: visible allies + comms prey reports; min sum Manhattan; `_chase` fallback when no prey known |
-| 6 | `optimal` | off | none | Clairvoyant BFS; all predators share one focus prey until captured |
+| 5 | `optimal` | off | none | Clairvoyant BFS; all predators share one focus prey until captured |
 
 Levels 1–3 and 5 draw **no role letters** in the GUI (`Agent.role` stays `None`).
 
@@ -292,24 +288,8 @@ Chebyshev range to the focus prey or a comms report attributed to that
 ally — visible co-presence alone is not enough. Predators without a role target use `_chase`.
 Solo predators fall back to `_chase`. Prey get `ROLE_FLEE` for display.
 
-Level 5 (`--mode pack`) requires `--comms predators` or `--comms both`.
-Pack mode uses **two-pass comms** ([`_exchange_pack_messages`](simulation.py)):
-pass 1 broadcasts direct enemy and ally sightings; pass 2 rebroadcasts
-the union of direct and pass-1 reports. That reaches teammates two hops
-away — enough for a three-predator chain to share all prey and ally
-positions. Other modes keep single-hop enemy comms only.
-
-Each predator with at least one visible or relayed ally runs local pack
-reasoning in [`DecisionMaking._pack`](decision_making.py): prey candidates
-are the union of `visible_enemies` and `shared_enemies`; peer positions
-are self plus `visible_allies` and `shared_allies`; the chosen prey
-minimizes the sum of Manhattan distances from those peers (tiebreak:
-lowest prey id). Pack members with the same relayed view independently
-reach the same target. Solo predators fall back to `_chase`. With allies
-but no known prey, pack members also fall back to `_chase`.
-
-Level 6 is **clairvoyant**: predators receive true prey positions
-each step via [`distances.bfs_distance`](distances.py) and path-step helpers in [`decision_making.py`](decision_making.py).
+Level 5 is **clairvoyant**: predators receive true prey positions
+each step via [`utils.bfs_first_step`](utils.py) (built on [`utils.bfs_search`](utils.py)).
 Same-team destination clashes are **not** planned away; the existing
 [`action_resolution`](action_resolution.py) pass resolves them (lowest
 agent id wins, forced STAY cascade).
@@ -319,7 +299,7 @@ agent id wins, forced STAY cascade).
 ## Perception, memory and team communication
 
 The per-step pipeline lives in [`simulation.py`](simulation.py)
-`SimulationState.step_once`:
+`Run.step_once`:
 
 1. **Raw observations.** Each alive agent gets an obs dict from
    [`observation_definition.py`](observation_definition.py): its own
@@ -363,9 +343,7 @@ The per-step pipeline lives in [`simulation.py`](simulation.py)
    `DecisionMaking.choose_action` with the comms-augmented obs plus
    `last_seen_enemy`. In `--mode roles`, `derive_role` runs inside
    `decide` before action selection. Predators dispatch on `--mode`
-   (`random`, `chase`, `pack`, `roles`, or `optimal`); prey always flee.
-   In `--mode pack`, pack prey selection lives entirely in
-   `DecisionMaking._pack`. The chosen action goes back to action
+   (`random`, `chase`, `roles`, or `optimal`); prey always flee. The chosen action goes back to action
    resolution.
 5. **Knockout system** (optional, opt-in via
    `--prey-defend {stun,kill}`). Sits between decisions and the
@@ -578,7 +556,7 @@ All flags are kebab-case; full list available via `python main.py --help`.
 | `--prey N` | 1 | Number of prey per run |
 | `--walls N` | 2 | Random wall segments to generate |
 | `--wall-size N` | 2 | Length of each generated wall segment |
-| `--mode {random,chase,roles,pack,optimal}` | `chase` | Predator decision mode (see "Predator behavior levels") |
+| `--mode {random,chase,roles,optimal}` | `chase` | Predator decision mode (see "Predator behavior levels") |
 | `--comms {prey,predators,both}` | off | Enable speaker-centric, single-hop intra-team communication for the given team(s); omit for none |
 | `--searcher` | off | In `--mode roles`, keep predators in `ROLE_SEARCHER` until prey is seen or comms-reported; persisted explore heading |
 | `--prey-defend {stun,kill}` | off | Enable the cooperative-knockout mechanic. Groups of Cheb-1 prey defeat up to `n-1` sandwiched predators per step (sandwicher prey are forced to STAY that step). `stun` freezes the predator for 3 steps; `kill` removes it from the run and ends the episode early once every predator is gone. See "Prey-defend (cooperative knockout)" above. |
@@ -594,14 +572,14 @@ through `random.Random(cfg.seed)` constructed per run.
 | File | Responsibility |
 |------|----------------|
 | [`main.py`](main.py) | CLI parsing, builds `SimulationConfig`, dispatches to batch or GUI |
-| [`simulation.py`](simulation.py) | `SimulationConfig`, `SimulationState`, the per-step pipeline, batch driver |
+| [`simulation.py`](simulation.py) | `SimulationConfig`, `Run`, the per-step pipeline, batch driver |
 | [`environment.py`](environment.py) | Grid, `AgentBody`, agent placement, `legal_actions`, capture resolution |
 | [`action_resolution.py`](action_resolution.py) | Same-step intention resolution with the same-team and cross-team movement rules |
 | [`observation_definition.py`](observation_definition.py) | Per-agent observation dict |
 | [`perception.py`](perception.py) | Pure perception helpers: `compute_active_enemies` (direct + shared fusion), `update_last_seen_enemy` memory refresh |
-| [`decision_making.py`](decision_making.py) | Role selector, pack helpers, `choose_action` (chase / flee / pack / optimal), BFS first-step for Level 6 |
+| [`decision_making.py`](decision_making.py) | Role selector, focus-prey helpers, `choose_action` (chase / flee / roles / optimal), BFS first-step for optimal |
 | [`agent.py`](agent.py) | `Agent` class: holds memory, role, role_target; `prepare_observation` perception fusion; `decide` glue |
-| [`agent_utils.py`](agent_utils.py) | Constants: actions, teams, outcomes, role names + display letters |
-| [`distances.py`](distances.py) | `chebyshev`, `manhattan`, `bfs_distance` |
+| [`constants.py`](constants.py) | Constants: actions, teams, outcomes, role names + display letters |
+| [`utils.py`](utils.py) | `apply_action`, `chebyshev`, `manhattan`, `bfs_search`, grid helpers |
 | [`reward_attribution.py`](reward_attribution.py) | Per-step reward shaping (each alive predator gets +1 on every step that a prey is captured) |
 | [`visualization.py`](visualization.py) | Pygame renderer with the legend above |

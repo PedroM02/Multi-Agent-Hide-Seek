@@ -1,20 +1,13 @@
-import agent_utils as au
-from distances import manhattan
+import constants as co
+from utils import manhattan
+
 from rl.team_search import known_prey_positions_from_obs
 
-DEFAULT_STEP_PENALTY = -0.001
-RL_STEP_PENALTY = -0.005
-DISTANCE_SHAPING_COEF = 0.01
-NEW_CELL_SHAPING_COEF = 0.02
-DISPERSION_SHAPING_COEF = 0.005
-
-
-def predator_team_reward(captured_prey_ids, step_penalty=DEFAULT_STEP_PENALTY):
-    """Shared team reward broadcast to every alive predator."""
-    reward = step_penalty
-    if captured_prey_ids:
-        reward += 1.0
-    return reward
+# Reward and penalty constants
+STEP_PENALTY = -0.005  # Penalty for each step taken
+DISTANCE_SHAPING_COEF = 0.01  # Reward coefficient for reducing distance to prey
+NEW_CELL_SHAPING_COEF = 0.02  # Reward coefficient for exploring new cells
+DISPERSION_SHAPING_COEF = 0.005  # Reward coefficient for increasing dispersion towards other predators
 
 
 def _known_prey_positions(raw_obs, predator_ids):
@@ -41,7 +34,7 @@ def _predator_positions_from_obs(raw_obs, predator_ids):
 def _predator_positions_from_env(env):
     positions = []
     for body in env.alive_bodies():
-        if body.team == au.TEAM_PREDATOR:
+        if body.team == co.TEAM_PREDATOR:
             positions.append((body.x, body.y))
     return positions
 
@@ -71,26 +64,28 @@ def _mean_pairwise_manhattan(positions):
 
 
 def predator_team_shaped_reward(
-    sim,
+    run,
     raw_obs_before,
     captured_prey_ids,
     visited_cells_before,
-    step_penalty=RL_STEP_PENALTY,
+    step_penalty=STEP_PENALTY,
     distance_coef=DISTANCE_SHAPING_COEF,
     new_cell_coef=NEW_CELL_SHAPING_COEF,
     dispersion_coef=DISPERSION_SHAPING_COEF,
     search_mode=False,
 ):
     """Team reward for RL training: capture bonus, step penalty, optional search shaping."""
-    reward = predator_team_reward(captured_prey_ids, step_penalty=step_penalty)
+    reward = step_penalty
+    if captured_prey_ids:
+        reward += 1.0
 
-    predator_ids = sim.predator_agent_ids()
+    predator_ids = run.env.alive_predator_ids()
     if not predator_ids:
         return reward
 
     prey_positions = _known_prey_positions(raw_obs_before, predator_ids)
     positions_before = _predator_positions_from_obs(raw_obs_before, predator_ids)
-    positions_after = _predator_positions_from_env(sim.env)
+    positions_after = _predator_positions_from_env(run.env)
 
     if prey_positions:
         dist_before = _team_min_manhattan_to_targets(
@@ -118,13 +113,3 @@ def predator_team_shaped_reward(
             reward += dispersion_coef * (dispersion_after - dispersion_before)
 
     return reward
-
-
-def attribute_rewards(env, captured_prey_ids):
-    rewards = {agent_id: 0.0 for agent_id in env.agent_bodies}
-    if not captured_prey_ids:
-        return rewards
-    for body in env.agent_bodies.values():
-        if body.team == au.TEAM_PREDATOR and body.alive:
-            rewards[body.agent_id] += 1.0
-    return rewards
