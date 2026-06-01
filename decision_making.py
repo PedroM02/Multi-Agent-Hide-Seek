@@ -1,4 +1,4 @@
-import random
+﻿import random
 import constants as co
 from utils import apply_action, bfs_first_step, chebyshev, manhattan
 
@@ -425,6 +425,8 @@ class DecisionMaking:
         # Otherwise, compute the second best aligned action (the first one is the heading itself)
         return self.best_aligned_action(legal, heading)
 
+
+
     def best_aligned_action(self, legal, heading):
         '''Computes the best aligned legal action from a heading, to be used when
            the heading's best action is not legal'''
@@ -440,8 +442,11 @@ class DecisionMaking:
                 continue
             # Get the candidate action's direction vector
             delta_x, delta_y = co.ACTION_DELTA[action]
-            # Compute the alignment score
-            score = delta_x * heading_x + delta_y * heading_y
+            # Compute the alignment score, uses rng for tiebreaking
+            score = (
+                delta_x * heading_x + delta_y * heading_y,
+                self.rng.randint(0, 1000),
+            )
             # If this action has a better alignment score than the best so far, update the best action and score
             if best_score is None or score > best_score:
                 best_score = score
