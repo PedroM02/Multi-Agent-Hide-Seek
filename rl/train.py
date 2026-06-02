@@ -212,7 +212,7 @@ def build_arg_parser():
     parser.add_argument("--predators", type=int, default=3, help="Number of predators per run")
     parser.add_argument("--num-walls", type=int, default=2, dest="num_walls", help="Number of wall segments to generate and place on the map randomly")
     parser.add_argument("--wall-size", type=int, default=2, help="Length, in cells, of wall segments")
-    parser.add_argument("--rollout-steps", type=int, default=4096, help="Number of transitions to collect in each batch")
+    parser.add_argument("--rollout-steps", type=int, default=4096, help="Number of transitions to collect per policy update")
     parser.add_argument("--lr", type=float, default=3e-4, help="Learning rate for the policy optimizer")
     parser.add_argument("--entropy-coef", type=float, default=0.02, help="Entropy bonus weight to encourage exploration")
     parser.add_argument("--entropy-floor", type=float, default=0.4, help="Penalize policy entropy below this value. Set 0 to disable")
