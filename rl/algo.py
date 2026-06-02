@@ -1,4 +1,4 @@
-"""RL algorithm identifiers."""
+"""RL algorithm identifiers"""
 
 IPPO = "ippo"
 MAPPO = "mappo"

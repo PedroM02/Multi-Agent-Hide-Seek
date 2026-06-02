@@ -1,12 +1,10 @@
-"""Per-predator search fallback for RL (option B: heuristic only, not trained)."""
-
 import random
 
 from decision_making import DecisionMaking
 
 
 def known_prey_positions_from_obs(obs):
-    """Set of (x, y) for prey known via visible + shared comms (roles union)."""
+    """Returns deduplicated positions of known enemies"""
     if obs is None:
         return set()
     positions = set()
@@ -20,7 +18,9 @@ def known_prey_positions_from_obs(obs):
 
 
 class PredatorSearchController:
-    """Per-agent search when no prey in sight/comms union; exit when prey is known again."""
+    """Returns True when predator is in search and False otherwise.
+       Starts search when no prey is in sight or communicated. Leaves search when prey is known again.
+       Also returns whether each predator just entered search"""
 
     def __init__(self, rng=None):
         self.search_logic = DecisionMaking(rng or random.Random(0))
@@ -29,13 +29,14 @@ class PredatorSearchController:
     def reset(self):
         self.in_search.clear()
 
-    def update(self, raw_obs, predator_ids):
+    def update(self, all_obs, predator_ids):
         """Update each predator. Returns (agent_in_search, agent_just_entered_search)."""
         agent_in_search = {}
         agent_just_entered = {}
 
+        # For each predator, put them in search if they don't know prey, or take them out of search otherwise
         for agent_id in predator_ids:
-            obs = raw_obs.get(agent_id)
+            obs = all_obs.get(agent_id)
             knows_prey = bool(known_prey_positions_from_obs(obs))
             was_search = self.in_search.get(agent_id, False)
             now_search = not knows_prey
@@ -47,38 +48,31 @@ class PredatorSearchController:
         return agent_in_search, agent_just_entered
 
 
-def update_predator_search_headings(
-    agents_by_id,
-    raw_obs,
-    predator_ids,
-    search_logic,
-    agent_in_search,
-    agent_just_entered,
-):
-    """Mirror roles-mode heading persistence per searching predator."""
+def update_predator_search_headings(agents_by_id, all_obs, predator_ids, search_logic, agent_in_search, agent_just_entered):
+    """Applies search via roles-mode direction persistence per searching predator."""
+    
+    # For each predator, check if they are in search and update direction if needed
     for agent_id in predator_ids:
         agent = agents_by_id[agent_id]
+        # If agent is not in search, clear search direction and then skip
         if not agent_in_search.get(agent_id, False):
             agent.search_heading = None
             agent.search_seen_ally_ids = set()
             continue
 
-        obs = raw_obs[agent_id]
-        visible_ally_ids = {
-            ally_id for _, _, ally_id in obs.get("visible_allies", ())
-        }
-        if (
-            agent_just_entered.get(agent_id, False)
-            or agent.search_heading is None
-        ):
+        obs = all_obs[agent_id]
+        visible_ally_ids = {ally_id for ally_x, ally_y, ally_id in obs.get("visible_allies", ())}
+        # If agent entered search, give it direction
+        if (agent_just_entered.get(agent_id, False) or agent.search_heading is None):
             agent.search_heading = search_logic.init_search_heading(obs)
+        # If new ally appeared, recalculate direction to ensure dispersion
         elif visible_ally_ids - agent.search_seen_ally_ids:
             agent.search_heading = search_logic.init_search_heading(obs)
         agent.search_seen_ally_ids = visible_ally_ids
 
 
 def choose_search_action(search_logic, agent, raw_obs):
-    """Pick a legal search move using the persisted heading on the agent."""
+    """Picks a legal move using the persisted direction on the agent."""
     obs_for_search = dict(raw_obs)
     obs_for_search["search_heading"] = agent.search_heading
     legal = list(raw_obs["legal_actions"])
@@ -86,4 +80,5 @@ def choose_search_action(search_logic, agent, raw_obs):
 
 
 def any_agent_in_search(agent_in_search):
+    '''Checks if any predator is currently searching'''
     return any(agent_in_search.values())
